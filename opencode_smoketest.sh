@@ -2,7 +2,7 @@
 
 # git checkout -- mini_terminal.py
 rm mini_terminal.py
-cp mini_terminal_w_prints.py  mini_terminal.py 
+cp mini_terminal_w_prints.py  mini_terminal.py   
 
 CMD1="please remove all the print statements from mini_terminal.py"
 CMD2="\n 1. Start a background process that counts to 60 and prints once every 5 seconds 2. Check it multiple times until it's done"
@@ -72,14 +72,8 @@ export OPENCODE_CONFIG="$PWD/opencode.json"
 export MAX_THINKING_TOKENS=10000
 
 
-export OPENCODE_CONFIG_CONTENT='{"model":"openrouter/gemini-2.5-pro"}'
+# export OPENCODE_CONFIG_CONTENT='{"model":"openrouter/gemini-2.5-pro"}'
 
-
-# this is `bun dev`
-# printf "$STR_TO_OUTPUT" | uv run acp_client.py bun --bun run --cwd /Users/ohadr/dev/forked-opencode/opencode/packages/opencode --conditions=browser src/index.ts acp
+export ACP_MODEL="openrouter/gemini-2.5-pro"
 
 printf "$STR_TO_OUTPUT" | uv run acp_client.py opencode acp
-
-# printf "$STR_TO_OUTPUT" | uv run acp_client.py claude-code-acp
-# printf "$STR_TO_OUTPUT" | uv run acp_client.py gemini --experimental-acp --yolo --allowed-tools run_shell_command -m gemini-2.5-pro
-

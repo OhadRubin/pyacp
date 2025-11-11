@@ -45,18 +45,3 @@ EOF
 export CODEX_HOME="codex_home"
 export LITELLM_KEY=sk-1234
 printf "$STR_TO_OUTPUT" | uv run acp_client.py codex-acp
-
-# MODEL_NAME="gemini-2.5-flash"
-# export OPENCODE_CONFIG_CONTENT="{\"model\":\"anthropic/$MODEL_NAME\"}"
-# CODEX_HOME="." codex -p gpt-5-mini-high
-
-#  codex -p gpt-5-mini-high
-
-# this is `bun dev`
-# printf "$STR_TO_OUTPUT" | uv run acp_client.py bun --bun run --cwd /Users/ohadr/dev/forked-opencode/opencode/packages/opencode --conditions=browser src/index.ts acp
-
-# printf "$STR_TO_OUTPUT" | uv run acp_client.py opencode acp
-
-# printf "$STR_TO_OUTPUT" | uv run acp_client.py claude-code-acp
-# printf "$STR_TO_OUTPUT" | uv run acp_client.py gemini --experimental-acp --yolo --allowed-tools run_shell_command -m gemini-2.5-flash
-

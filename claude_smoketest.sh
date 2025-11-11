@@ -12,13 +12,11 @@ export CLAUDE_CODE_ACTION=bypassPermissions
 export ANTHROPIC_MODEL="worker-claude-sonnet-4-5"
 export ANTHROPIC_SMALL_FAST_MODEL="worker-claude-haiku-4-5"
 export MAX_THINKING_TOKENS=10000
-# export ANTHROPIC_AUTH_TOKEN=""
 export ANTHROPIC_BASE_URL="http://0.0.0.0:4000"
 export ANTHROPIC_AUTH_TOKEN="sk-1234"
 export ACP_MODEL=$ANTHROPIC_MODEL
-# export FORCE_CODE_TERMINAL=true
+
 printf "$STR_TO_OUTPUT" | uv run acp_client.py claude-code-acp
-# claude 
-# -p hello
+
 
 
