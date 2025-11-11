@@ -1,0 +1,56 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "model": "anthropic/worker-claude-sonnet-4-5",
+  "provider": {
+
+    "anthropic": {
+      "options": {
+        "baseURL": "http://127.0.0.1:4000/v1",
+        "apiKey": "sk-1234"
+      },
+      "models": {
+        "worker-claude-sonnet-4-5": {
+          "name": "Worker Claude Sonnet 4.5",
+          "options": {
+            "thinking": {
+              "type": "enabled",
+              "budgetTokens": 16000
+            }
+          }
+        },
+        "gemini-2.5-pro": {
+          "name": "Gemini 2.5 pro"
+        }
+      }
+    },
+    "openrouter": {
+      "options": {
+        "baseURL": "http://127.0.0.1:4000/v1",
+        "apiKey": "sk-1234"
+      },
+      "models": {
+        "gemini-2.5-pro": {
+          "name": "Gemini 2.5 pro"
+        }
+      }
+    },
+    "openai": {
+      "options": {
+        "baseURL": "http://127.0.0.1:4000/v1",
+        "apiKey": "sk-1234"
+      },
+      "models": {
+        "gpt-5": {
+          "options": {
+            "reasoningEffort": "low",
+            "textVerbosity": "low",
+            "reasoningSummary": "auto",
+            "include": ["reasoning.encrypted_content"]
+          }
+        }
+      }
+    }
+  }
+  
+}
+

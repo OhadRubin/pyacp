@@ -1,0 +1,642 @@
+# npm install @zed-industries/codex-acp
+# uv add agent-client-protocol
+# npm install -g @zed-industries/claude-code-acp
+#  uv run acp_client.py claude-code-acp
+#  uv run acp_client.py codex-acp
+
+from __future__ import annotations
+
+import asyncio
+import asyncio.subprocess
+import contextlib
+import json
+import logging
+import os
+import sys
+from pathlib import Path
+from typing import Iterable, Any
+
+
+from acp import (
+    Client,
+    ClientSideConnection,
+    PROTOCOL_VERSION,
+    RequestError,
+    text_block,
+)
+from acp.transports import spawn_stdio_transport
+from acp.schema import (
+    AgentMessageChunk,
+    AgentPlanUpdate,
+    AgentThoughtChunk,
+    AllowedOutcome,
+    CancelNotification,
+    ClientCapabilities,
+    FileEditToolCallContent,
+    FileSystemCapability,
+    CreateTerminalRequest,
+    CreateTerminalResponse,
+    DeniedOutcome,
+    EmbeddedResourceContentBlock,
+    KillTerminalCommandRequest,
+    KillTerminalCommandResponse,
+    InitializeRequest,
+    SetSessionModelRequest,
+    NewSessionRequest,
+    PermissionOption,
+    PromptRequest,
+    ReadTextFileRequest,
+    ReadTextFileResponse,
+    RequestPermissionRequest,
+    RequestPermissionResponse,
+    ResourceContentBlock,
+    ReleaseTerminalRequest,
+    ReleaseTerminalResponse,
+    SessionNotification,
+    TerminalToolCallContent,
+    TerminalOutputRequest,
+    TerminalOutputResponse,
+    ContentToolCallContent,
+    TextContentBlock,
+    ToolCallProgress,
+    ToolCallStart,
+    UserMessageChunk,
+    WaitForTerminalExitRequest,
+    WaitForTerminalExitResponse,
+    WriteTextFileRequest,
+    WriteTextFileResponse,
+)
+from acp.contrib.session_state import SessionAccumulator
+from acp.task.state import InMemoryMessageStateStore
+
+#!/usr/bin/env python3
+"""
+ACP client that emits canonical WorkerFormat events inline.
+
+Only these content block types are emitted:
+- TextBlock, ThinkingBlock, ToolUseBlock, ToolResultBlock, ContentBlock
+"""
+
+from typing import Dict, Any
+
+
+# Removed old ACP-to-worker converter and logging handler classes; emission happens inline in ACPClient
+
+
+
+
+
+from dataclasses import dataclass, field
+import uuid
+
+
+@dataclass
+class TerminalInfo:
+    """Tracks a single terminal instance."""
+    terminal_id: str
+    process: asyncio.subprocess.Process
+    output_buffer: bytearray = field(default_factory=bytearray)
+    output_byte_limit: int | None = None
+    truncated: bool = False
+    exit_code: int | None = None
+    signal: str | None = None
+    _output_task: asyncio.Task | None = None
+
+    def add_output(self, data: bytes) -> None:
+        """Add output data, enforcing byte limit with UTF-8 character boundary truncation."""
+        self.output_buffer.extend(data)
+
+        if self.output_byte_limit is not None and len(self.output_buffer) > self.output_byte_limit:
+            # Truncate from the beginning, ensuring UTF-8 character boundaries
+            excess = len(self.output_buffer) - self.output_byte_limit
+
+            # Find a valid UTF-8 starting point after the excess
+            truncate_point = excess
+            while truncate_point < len(self.output_buffer):
+                try:
+                    # Try to decode from this point to verify it's a valid UTF-8 boundary
+                    self.output_buffer[truncate_point:truncate_point+1].decode('utf-8', errors='strict')
+                    break
+                except UnicodeDecodeError:
+                    truncate_point += 1
+
+            self.output_buffer = self.output_buffer[truncate_point:]
+            self.truncated = True
+
+    def get_output(self) -> str:
+        """Get the current output as a string."""
+        try:
+            return self.output_buffer.decode('utf-8', errors='replace')
+        except Exception:
+            return self.output_buffer.decode('utf-8', errors='ignore')
+
+
+class MyInMemoryMessageStateStore(InMemoryMessageStateStore):
+    def __init__(self, client_impl: "ACPClient"):
+        super().__init__()
+        self._client_impl = client_impl
+
+    def resolve_outgoing(self, request_id: int, result):
+        # Flush accumulated message when a turn ends
+        try:
+            stop_reason = None
+            if isinstance(result, dict):
+                stop_reason = result.get("stopReason")
+            else:
+                # Fallback for objects with attribute access
+                stop_reason = getattr(result, "stopReason", None)
+            if stop_reason == "end_turn":
+                self._client_impl._flush_accumulated_message(trigger="end_turn")
+        except Exception:
+            # Never let flushing interfere with state resolution
+            pass
+        super().resolve_outgoing(request_id, result)
+
+
+
+
+
+class ACPClient(Client):
+    def __init__(self):
+        self.accumulated_message = ""
+        self.current_message_type = None
+
+
+        # Terminal management
+        self.terminals: dict[str, TerminalInfo] = {}
+        self._terminal_counter = 0
+        self.tool_call_requests = {}
+
+    # ------------------------- WorkerFormat emitters -------------------------
+    def _emit_worker_event(self, payload: dict) -> None:
+        try:
+            sys.stdout.write(json.dumps(payload) + "\n")
+            sys.stdout.flush()
+        except Exception:
+            # Never let emitting break the flow
+            pass
+
+    def _emit_text(self, text: str) -> None:
+        if not text:
+            return
+        self._emit_worker_event({"type": "TextBlock", "message": {"text": text}})
+
+    def _emit_thinking(self, thinking: str) -> None:
+        if not thinking:
+            return
+        self._emit_worker_event({"type": "ThinkingBlock", "message": {"thinking": thinking}})
+
+    async def requestPermission(
+        self,
+        params: RequestPermissionRequest,
+    ) -> RequestPermissionResponse:  # type: ignore[override]
+        option = _pick_preferred_option(params.options)
+        if option is None:
+            return RequestPermissionResponse(outcome=DeniedOutcome(outcome="cancelled"))
+        return RequestPermissionResponse(outcome=AllowedOutcome(optionId=option.optionId, outcome="selected"))
+
+    async def writeTextFile(
+        self,
+        params: WriteTextFileRequest,
+    ) -> WriteTextFileResponse:  # type: ignore[override]
+        path = Path(params.path)
+        if not path.is_absolute():
+            raise RequestError.invalid_params({"path": params.path, "reason": "path must be absolute"})
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(params.content)
+        # Intentionally quiet; WorkerFormat emission handled elsewhere
+        return WriteTextFileResponse()
+
+    async def readTextFile(
+        self,
+        params: ReadTextFileRequest,
+    ) -> ReadTextFileResponse:  # type: ignore[override]
+        path = Path(params.path)
+        if not path.is_absolute():
+            raise RequestError.invalid_params({"path": params.path, "reason": "path must be absolute"})
+        text = path.read_text()
+        # Intentionally quiet; WorkerFormat emission handled via hooks
+        if params.line is not None or params.limit is not None:
+            text = _slice_text(text, params.line, params.limit)
+        return ReadTextFileResponse(content=text)
+
+
+
+    async def sessionUpdate(
+        self,
+        params: SessionNotification,
+    ) -> None:  # type: ignore[override]
+        update = params.update
+        if isinstance(update, AgentMessageChunk):
+            self._accumulate_chunk("agent_message", update.content)
+        elif isinstance(update, AgentThoughtChunk):
+            self._accumulate_chunk("agent_thought", update.content)
+        elif isinstance(update, UserMessageChunk):
+            self._accumulate_chunk("user_message", update.content)
+        else:
+            self._flush_accumulated_message(trigger="other_update")
+            print(f"[params]: {params}")
+
+    # Accumulation helpers -------------------------------------------------
+    def _extract_text(self, content: object) -> str:
+        if isinstance(content, TextContentBlock):
+            return content.text
+        if isinstance(content, ResourceContentBlock):
+            return content.name or content.uri or ""
+        if isinstance(content, EmbeddedResourceContentBlock):
+            resource = content.resource
+            text = getattr(resource, "text", None)
+            if text:
+                return text
+            blob = getattr(resource, "blob", None)
+            return blob or ""
+        if isinstance(content, dict):
+            # Attempt to pull text field if present
+            return str(content.get("text", ""))
+        return ""
+
+    def _accumulate_chunk(self, msg_type: str, content: object) -> None:
+        # Flush if the incoming type differs from current
+        if self.current_message_type and msg_type != self.current_message_type:
+            self._flush_accumulated_message(trigger="type_change")
+
+        if self.current_message_type != msg_type:
+            self.current_message_type = msg_type
+
+        text = self._extract_text(content)
+        if text:
+            self.accumulated_message += text
+
+    def _flush_accumulated_message(self, trigger: str | None = None) -> None:
+        if self.accumulated_message:
+            msg_type = self.current_message_type or "message"
+            if msg_type == "agent_thought":
+                self._emit_thinking(self.accumulated_message)
+            elif msg_type == "agent_message":
+                self._emit_text(self.accumulated_message)
+            # Deliberately skip emitting user messages to keep only canonical blocks
+        # Reset regardless of whether there was content
+        self.accumulated_message = ""
+        self.current_message_type = None
+
+    # Optional / terminal-related methods ---------------------------------
+    async def _capture_terminal_output(self, terminal_info: TerminalInfo) -> None:
+        """Background task to capture stdout and stderr from a terminal process."""
+        try:
+            # Capture both stdout and stderr
+            tasks = []
+            if terminal_info.process.stdout:
+                tasks.append(self._read_stream(terminal_info, terminal_info.process.stdout))
+            if terminal_info.process.stderr:
+                tasks.append(self._read_stream(terminal_info, terminal_info.process.stderr))
+
+            if tasks:
+                await asyncio.gather(*tasks)
+
+            # Wait for process to complete and capture exit status
+            await terminal_info.process.wait()
+
+            # Determine exit status
+            if terminal_info.process.returncode is not None:
+                if terminal_info.process.returncode < 0:
+                    # Negative return codes typically indicate signals
+                    import signal
+                    try:
+                        sig = signal.Signals(-terminal_info.process.returncode)
+                        terminal_info.signal = sig.name
+                    except (ValueError, AttributeError):
+                        terminal_info.signal = f"SIGNAL_{-terminal_info.process.returncode}"
+                else:
+                    terminal_info.exit_code = terminal_info.process.returncode
+
+        except Exception:
+            pass
+
+    async def _read_stream(self, terminal_info: TerminalInfo, stream: asyncio.StreamReader) -> None:
+        """Read from a stream and add to terminal output buffer."""
+        try:
+            while True:
+                chunk = await stream.read(4096)
+                if not chunk:
+                    break
+                terminal_info.add_output(chunk)
+        except Exception:
+            pass
+
+    async def createTerminal(
+        self,
+        params: CreateTerminalRequest,
+    ) -> CreateTerminalResponse:  # type: ignore[override]
+        # Generate unique terminal ID
+        self._terminal_counter += 1
+        terminal_id = f"term_{uuid.uuid4().hex[:8]}_{self._terminal_counter}"
+
+        # Build environment
+        env = dict(os.environ)
+        if params.env:
+            for env_var in params.env:
+                env[env_var.name] = env_var.value
+
+        # Build command - always run through shell like a real terminal
+        full_command = params.command
+        if params.args:
+            full_command += ' ' + ' '.join(params.args)
+        cmd = ['/bin/sh', '-c', full_command]
+
+        # Determine working directory
+        cwd = params.cwd if params.cwd else os.getcwd()
+
+        try:
+            # Spawn the process
+            process = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                cwd=cwd,
+                env=env,
+            )
+
+            # Create terminal info
+            terminal_info = TerminalInfo(
+                terminal_id=terminal_id,
+                process=process,
+                output_byte_limit=params.outputByteLimit,
+            )
+
+            # Start background task to capture output
+            terminal_info._output_task = asyncio.create_task(
+                self._capture_terminal_output(terminal_info)
+            )
+
+            # Register terminal
+            self.terminals[terminal_id] = terminal_info
+
+            return CreateTerminalResponse(terminalId=terminal_id)
+
+        except Exception as exc:
+            raise RequestError.internal_error({"message": f"Failed to create terminal: {exc}"})
+
+    async def terminalOutput(
+        self,
+        params: TerminalOutputRequest,
+    ) -> TerminalOutputResponse:  # type: ignore[override]
+        terminal_info = self.terminals.get(params.terminalId)
+        if not terminal_info:
+            raise RequestError.invalid_params({
+                "terminalId": params.terminalId,
+                "reason": "Terminal not found"
+            })
+
+        output = terminal_info.get_output()
+
+        # Build response
+        response_data = {
+            "output": output,
+            "truncated": terminal_info.truncated,
+        }
+
+        # Add exit status if process has completed
+        if terminal_info.exit_code is not None or terminal_info.signal is not None:
+            response_data["exitStatus"] = {
+                "exitCode": terminal_info.exit_code,
+                "signal": terminal_info.signal,
+            }
+
+        return TerminalOutputResponse(**response_data)
+
+    async def releaseTerminal(
+        self,
+        params: ReleaseTerminalRequest,
+    ) -> ReleaseTerminalResponse:  # type: ignore[override]
+        terminal_info = self.terminals.get(params.terminalId)
+        if not terminal_info:
+            raise RequestError.invalid_params({
+                "terminalId": params.terminalId,
+                "reason": "Terminal not found"
+            })
+
+        # Kill the process if it's still running
+        if terminal_info.process.returncode is None:
+            try:
+                terminal_info.process.kill()
+                # Wait briefly for the process to terminate
+                try:
+                    await asyncio.wait_for(terminal_info.process.wait(), timeout=2.0)
+                except asyncio.TimeoutError:
+                    pass
+            except Exception as exc:
+                pass
+
+        # Cancel the output capture task if it's still running
+        if terminal_info._output_task and not terminal_info._output_task.done():
+            terminal_info._output_task.cancel()
+            try:
+                await terminal_info._output_task
+            except asyncio.CancelledError:
+                pass
+            except Exception:
+                pass
+
+        # Remove from registry
+        del self.terminals[params.terminalId]
+
+        return ReleaseTerminalResponse()
+
+    async def waitForTerminalExit(
+        self,
+        params: WaitForTerminalExitRequest,
+    ) -> WaitForTerminalExitResponse:  # type: ignore[override]
+        terminal_info = self.terminals.get(params.terminalId)
+        if not terminal_info:
+            raise RequestError.invalid_params({
+                "terminalId": params.terminalId,
+                "reason": "Terminal not found"
+            })
+
+        # Wait for the process to complete
+        await terminal_info.process.wait()
+
+        return WaitForTerminalExitResponse(
+            exitCode=terminal_info.exit_code,
+            signal=terminal_info.signal
+        )
+
+    async def killTerminal(
+        self,
+        params: KillTerminalCommandRequest,
+    ) -> KillTerminalCommandResponse:  # type: ignore[override]
+        terminal_info = self.terminals.get(params.terminalId)
+        if not terminal_info:
+            raise RequestError.invalid_params({
+                "terminalId": params.terminalId,
+                "reason": "Terminal not found"
+            })
+
+        # Kill the process if it's still running
+        if terminal_info.process.returncode is None:
+            try:
+                terminal_info.process.kill()
+                pass
+            except Exception:
+                pass
+
+        return KillTerminalCommandResponse()
+
+
+def _pick_preferred_option(options: Iterable[PermissionOption]) -> PermissionOption | None:
+    best: PermissionOption | None = None
+    for option in options:
+        if option.kind in {"allow_once", "allow_always"}:
+            return option
+        best = best or option
+    return best
+
+
+def _slice_text(content: str, line: int | None, limit: int | None) -> str:
+    lines = content.splitlines()
+    start = 0
+    if line:
+        start = max(line - 1, 0)
+    end = len(lines)
+    if limit:
+        end = min(start + limit, end)
+    return "\n".join(lines[start:end])
+
+
+async def interactive_loop(conn: ClientSideConnection, session_id: str) -> None:
+    print("Type a message and press Enter to send.")
+    print("Commands: :cancel, :exit")
+
+    loop = asyncio.get_running_loop()
+    while True:
+        try:
+            line = await loop.run_in_executor(None, lambda: input("\n> ").strip())
+        except (EOFError, KeyboardInterrupt):
+            print("\nExiting.")
+            break
+
+        if not line:
+            continue
+        if line in {":exit", ":quit"}:
+            break
+        if line == ":cancel":
+            await conn.cancel(CancelNotification(sessionId=session_id))
+            continue
+
+        try:
+            # print(f"[line]: {line}")
+            await conn.prompt(
+                PromptRequest(
+                    sessionId=session_id,
+                    prompt=[text_block(line)],
+                )
+            )
+        except RequestError as err:
+            _print_request_error("prompt", err)
+        except Exception as exc:  # noqa: BLE001
+            print(f"Prompt failed: {exc}", file=sys.stderr)
+
+
+async def run(argv: list[str]) -> int:
+    if len(argv) < 2:
+        print("Usage: python acp_client.py AGENT_PROGRAM [ARGS...]", file=sys.stderr)
+        return 2
+    model_id = os.environ.get("ACP_MODEL", None)
+    program = argv[1]
+    args = argv[2:]
+
+    program_path = Path(program)
+    spawn_program = program
+    spawn_args = args
+
+    if program_path.exists() and not os.access(program_path, os.X_OK):
+        spawn_program = sys.executable
+        spawn_args = [str(program_path), *args]
+
+    try:
+        async with spawn_stdio_transport(
+            spawn_program,
+            *spawn_args,
+            stderr=asyncio.subprocess.PIPE,
+            env={
+                **os.environ,
+            },
+        ) as (stdout, stdin, proc):
+            client_impl = ACPClient()
+            conn = ClientSideConnection(
+                lambda _agent: client_impl,
+                stdin,
+                stdout,
+                state_store=MyInMemoryMessageStateStore(client_impl),
+            )
+
+            try:
+                init_resp = await conn.initialize(
+                    InitializeRequest(
+                        protocolVersion=PROTOCOL_VERSION,
+                        clientCapabilities=ClientCapabilities(
+                            fs=FileSystemCapability(readTextFile=True, writeTextFile=True),
+                            terminal=True,
+                        ),
+                    )
+                )
+            except RequestError as err:
+                _print_request_error("initialize", err)
+                return 1
+            except Exception as exc:  # noqa: BLE001
+                print(f"Initialize error: {exc}", file=sys.stderr)
+                return 1
+
+            # No non-canonical emission here
+
+            try:
+                session = await conn.newSession(
+                    NewSessionRequest(
+                        cwd=os.getcwd(),
+                        mcpServers=[],
+                    )
+                )
+            except RequestError as err:
+                _print_request_error("new_session", err)
+                return 1
+            except Exception as exc:  # noqa: BLE001
+                print(f"New session error: {exc}", file=sys.stderr)
+                return 1
+
+            # No non-canonical emission here
+            if model_id is not None:
+                await conn.setSessionModel(SetSessionModelRequest(modelId=model_id,sessionId=session.sessionId))
+
+            await interactive_loop(conn, session.sessionId)
+
+            # Close connection gracefully before exiting context
+            with contextlib.suppress(Exception):
+                await conn.close()
+
+            return 0
+
+    except FileNotFoundError as exc:
+        print(f"Failed to start agent process: {exc}", file=sys.stderr)
+        return 1
+
+
+def _print_request_error(stage: str, err: RequestError) -> None:
+    payload = err.to_error_obj()
+    message = payload.get("message", "")
+    code = payload.get("code")
+    data = payload.get("data")
+    print(f"{stage} request error: code={code} message={message} data={data}", file=sys.stderr)
+
+
+def main(argv: list[str] | None = None) -> int:
+    # Keep logging quiet; emission happens directly from ACPClient
+    root_logger = logging.getLogger()
+    root_logger.handlers.clear()
+    root_logger.setLevel(logging.ERROR)
+
+    args = sys.argv if argv is None else argv
+    return asyncio.run(run(list(args)))
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
