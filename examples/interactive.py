@@ -7,7 +7,7 @@ import os
 import sys
 
 from acp import RequestError
-from pyacp.sdk.client import PyACPSDKClient, PyACPAgentOptions
+from simple_acp_client.sdk.client import PyACPSDKClient, PyACPAgentOptions
 
 
 async def interactive_loop(client: PyACPSDKClient) -> None:

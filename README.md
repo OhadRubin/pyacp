@@ -1,6 +1,6 @@
-# PyACP
+# Simple ACP Client
 
-**PyACP** is a Python SDK for the [Agent Client Protocol (ACP)](https://github.com/anthropics/acp), providing a high-level, async-friendly interface for interacting with ACP-compatible agents. Build powerful agent-based applications with support for streaming messages, terminal operations, and filesystem capabilities.
+**Simple ACP Client** is a Python SDK for the [Agent Client Protocol (ACP)](https://github.com/anthropics/acp), providing a high-level, async-friendly interface for interacting with ACP-compatible agents. Build powerful agent-based applications with support for streaming messages, terminal operations, and filesystem capabilities.
 
 ## Features
 
@@ -20,16 +20,16 @@
 
 ## Installation
 
-Install PyACP using pip:
+Install Simple ACP Client using pip:
 
 ```bash
-pip install pyacp
+pip install simple-acp-client
 ```
 
 Or with uv:
 
 ```bash
-uv add pyacp
+uv add simple-acp-client
 ```
 
 ## Quick Start
@@ -38,7 +38,7 @@ Here's a simple example to get you started:
 
 ```python
 import asyncio
-from pyacp.sdk.client import PyACPSDKClient, PyACPAgentOptions
+from simple_acp_client.sdk.client import PyACPSDKClient, PyACPAgentOptions
 
 async def main():
     # Configure the agent options
@@ -80,7 +80,7 @@ The main client class that manages connections to ACP agents and handles protoco
 #### Example Usage
 
 ```python
-from pyacp.sdk.client import PyACPSDKClient, PyACPAgentOptions
+from simple_acp_client.sdk.client import PyACPSDKClient, PyACPAgentOptions
 
 # Initialize with options
 options = PyACPAgentOptions(
@@ -121,7 +121,7 @@ Configuration options for the ACP agent connection.
 
 ### Message Types
 
-PyACP uses typed message objects defined in `pyacp.core`:
+Simple ACP Client uses typed message objects defined in `simple_acp_client.core`:
 
 #### TextBlock
 
@@ -164,7 +164,7 @@ class OtherUpdate:
 
 ```python
 import asyncio
-from pyacp.sdk.client import PyACPSDKClient, PyACPAgentOptions
+from simple_acp_client.sdk.client import PyACPSDKClient, PyACPAgentOptions
 
 async def interactive_loop(client: PyACPSDKClient):
     """Interactive command-line interface."""
@@ -301,7 +301,7 @@ npm install -g @zed-industries/codex-acp
 # Use with PyACP
 python -c "
 import asyncio
-from pyacp.sdk.client import PyACPSDKClient, PyACPAgentOptions
+from simple_acp_client.sdk.client import PyACPSDKClient, PyACPAgentOptions
 
 async def main():
     async with PyACPSDKClient(PyACPAgentOptions()) as client:
@@ -319,8 +319,8 @@ asyncio.run(main())
 ### Project Structure
 
 ```
-pyacp/
-├── pyacp/
+simple-acp-client/
+├── simple_acp_client/
 │   ├── sdk/
 │   │   └── client.py          # Main SDK client
 │   ├── capabilities/
@@ -339,8 +339,8 @@ The project includes an interactive CLI example:
 
 ```bash
 # Clone the repository
-git clone <repo-url>
-cd pyacp
+git clone https://github.com/OhadRubin/simple-acp-client.git
+cd simple-acp-client
 
 # Install dependencies
 uv sync
@@ -378,7 +378,7 @@ Contributions are welcome! Please feel free to submit a Pull Request.
 
 ### 0.1.0 (Initial Release)
 
-- Initial implementation of PyACP SDK
+- Initial implementation of Simple ACP Client SDK
 - Support for streaming messages
 - Terminal and filesystem capabilities
 - Async context manager support

@@ -41,15 +41,15 @@ from acp.schema import (
 )
 from acp.task.state import InMemoryMessageStateStore
 
-from pyacp.core import (
+from simple_acp_client.core import (
     TextBlock,
     ThinkingBlock,
     OtherUpdate,
     EndOfTurnMessage,
     Message,
 )
-from pyacp.capabilities.filesystem import FileSystemController
-from pyacp.capabilities.terminal import TerminalController
+from simple_acp_client.capabilities.filesystem import FileSystemController
+from simple_acp_client.capabilities.terminal import TerminalController
 
 
 def _pick_preferred_option(options: Iterable[PermissionOption]) -> PermissionOption | None:
