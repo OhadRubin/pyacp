@@ -41,6 +41,13 @@ asyncio_mode = "auto"
 testpaths = ["tests"]
 python_files = ["test_*.py"]
 python_functions = ["test_*"]
+markers = [
+    "e2e: end-to-end tests (may be slow)",
+    "claude_code_acp: tests requiring Claude Code ACP",
+    "codex_acp: tests requiring Codex ACP",
+    "opencode: tests requiring OpenCode",
+    "gemini: tests requiring Gemini with ACP support",
+]
 
 [tool.mypy]
 python_version = "3.12"
