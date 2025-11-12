@@ -22,7 +22,7 @@ from acp import (
     ClientSideConnection,
     PROTOCOL_VERSION,
     RequestError,
-    text_block,
+    text_block as acp_text_block,
 )
 from acp.transports import spawn_stdio_transport
 from acp.schema import (
@@ -80,7 +80,8 @@ Only these content block types are emitted:
 
 # Removed old ACP-to-worker converter and logging handler classes; emission happens inline in ACPClient
 
-
+from pyacp.types.messages import Message, AssistantMessage, ResultMessage
+from pyacp.types.content import TextBlock, ThinkingBlock, ContentBlock
 
 
 
@@ -88,6 +89,192 @@ from pyacp.client.event_emitter import EventEmitter
 from pyacp.client.terminal_controller import TerminalController
 from pyacp.client.file_system_controller import FileSystemController
 
+
+from dataclasses import dataclass, field
+from typing import AsyncIterable, Iterable
+import asyncio
+from pathlib import Path
+
+from acp.schema import (
+    CancelNotification,
+    DeniedOutcome,
+    AllowedOutcome,
+)
+from pyacp.types.messages import PermissionOption
+from acp.client import Client, ClientSideConnection
+
+from typing import AsyncIterator
+
+
+@dataclass
+class PyACPAgentOptions:
+    """Configuration options for ACP agent queries.
+
+    This provides a Claude SDK-compatible interface for ACP agents.
+    """
+    model: str | None = None
+    cwd: str | Path | None = None
+    env: dict[str, str] = field(default_factory=dict)
+    max_turns: int | None = None
+
+    # Additional ACP-specific options
+    agent_program: str | None = None  # Path to ACP agent executable
+    agent_args: list[str] = field(default_factory=list)  # Args for agent
+
+
+class PyACPSDKClient:
+    """
+    High-level SDK client that maintains conversation sessions across multiple exchanges.
+
+    This provides a Claude-SDK-compatible interface for ACP agents.
+    """
+
+    def __init__(self, options: PyACPAgentOptions | None = None) -> None:
+        """
+        Initialize the SDK client with optional configuration.
+
+        Args:
+            options: Configuration options for the agent
+        """
+        self.options = options or PyACPAgentOptions()
+        self._connection: ClientSideConnection | None = None
+        self._session_id: str | None = None
+        self._client_impl: _SDKClientImplementation | None = None
+        self._message_queue: asyncio.Queue[Message] = asyncio.Queue()
+        self._connected = False
+
+
+    async def __aenter__(self) -> PyACPSDKClient:
+        """Async context manager entry."""
+        await self.connect()
+        return self
+
+    async def __aexit__(self, exc_type, exc_val, exc_tb) -> None:
+        """Async context manager exit."""
+        await self.disconnect()
+
+    async def connect(self, prompt: str | AsyncIterable[dict] | None = None) -> None:
+        """
+        Connect to the ACP agent with an optional initial prompt.
+
+        Args:
+            prompt: Optional initial prompt as a string or async iterable
+        """
+        pass
+
+    async def query(
+        self,
+        prompt: str | AsyncIterable[dict],
+        session_id: str = "default"
+    ) -> None:
+        """
+        Send a new request in streaming mode.
+
+        Args:
+            prompt: The input prompt as a string or async iterable
+            session_id: Session identifier (not used, kept for API compatibility)
+        """
+        if not self._connected or not self._connection or not self._session_id:
+            raise RuntimeError("Client not connected. Call connect() first.")
+
+        # Convert prompt to ACP format
+        if isinstance(prompt, str):
+            prompt_blocks = [acp_text_block(prompt)]
+        else:
+            # For async iterable, collect all messages
+            prompt_blocks = []
+            async for msg in prompt:
+                if isinstance(msg, dict) and "text" in msg:
+                    prompt_blocks.append(acp_text_block(msg["text"]))
+
+        # Send prompt request
+        await self._connection.prompt(
+            PromptRequest(
+                sessionId=self._session_id,
+                prompt=prompt_blocks,
+            )
+        )
+
+    async def receive_messages(self) -> AsyncIterator[Message]:
+        """
+        Receive all messages from agent as an async iterator.
+
+        Yields:
+            Message objects from the conversation
+        """
+        while not self._message_queue.empty():
+            yield await self._message_queue.get()
+
+    async def receive_response(self) -> AsyncIterator[Message]:
+        """
+        Receive messages until and including a ResultMessage.
+
+        Yields:
+            Message objects until a ResultMessage is received
+        """
+        if not self._connected:
+            raise RuntimeError("Client not connected")
+
+        # Flush any accumulated messages from the client impl
+        if self._client_impl:
+            self._client_impl._flush()
+
+        while True:
+            # Get next message from queue
+            message = await self._message_queue.get()
+            yield message
+
+            if isinstance(message, ResultMessage):
+                break
+
+            # For now, we'll break after getting at least one message
+            # In a full implementation, this would wait for a proper ResultMessage
+            # from the ACP protocol
+            if isinstance(message, AssistantMessage):
+                # Create a synthetic ResultMessage
+                result = ResultMessage(
+                    subtype="success",
+                    duration_ms=0,
+                    duration_api_ms=0,
+                    is_error=False,
+                    num_turns=1,
+                    session_id=self._session_id or "default",
+                )
+                yield result
+                break
+
+    async def interrupt(self) -> None:
+        """
+        Send interrupt signal (only works in streaming mode).
+        """
+        if not self._connected or not self._connection or not self._session_id:
+            raise RuntimeError("Client not connected. Call connect() first.")
+
+        await self._connection.cancel(
+            CancelNotification(sessionId=self._session_id)
+        )
+
+    async def disconnect(self) -> None:
+        """
+        Disconnect from agent and clean up resources.
+        """
+        # Flush any pending messages
+        self._client_impl._flush()
+
+        if self._connection:
+            try:
+                await self._connection.close()
+            except Exception:
+                pass
+            self._connection = None
+
+        # Exit transport context manager (handles process cleanup)
+        if self._transport_cm:
+            try:
+                await self._transport_cm.__aexit__(None, None, None)
+            except Exception:
+                pass
+            self._transport_cm = None
 
 
 
@@ -151,7 +338,7 @@ async def interactive_loop(conn: ClientSideConnection, session_id: str) -> None:
             await conn.prompt(
                 PromptRequest(
                     sessionId=session_id,
-                    prompt=[text_block(line)],
+                    prompt=[acp_text_block(line)],
                 )
             )
         except RequestError as err:
