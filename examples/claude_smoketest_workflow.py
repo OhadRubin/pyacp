@@ -2,10 +2,8 @@
 """Example replicating claude_smoketest.sh workflow using PyACP SDK.
 
 This example demonstrates:
-1. Multi-turn conversation with context
-2. File editing operations
-3. Background process management
-4. Multiple task execution
+1. Simple file editing operation
+2. Receiving and processing agent responses
 
 Based on scripts/claude_smoketest.sh
 """
@@ -58,56 +56,6 @@ async def main():
         print("\nSending: 'please remove all the print statements from mini_terminal.py'\n")
 
         await client.query("please remove all the print statements from mini_terminal.py")
-
-        async for message in client.receive_response():
-            if isinstance(message, AssistantMessage):
-                for block in message.content:
-                    if isinstance(block, ThinkingBlock):
-                        print(f"[Thinking] {block.thinking[:200]}...")
-                    elif isinstance(block, TextBlock):
-                        print(f"[Agent] {block.text}")
-            elif isinstance(message, ResultMessage):
-                print(f"\n[Result] Task completed in {message.duration_ms}ms")
-                print(f"         Turns: {message.num_turns}, Error: {message.is_error}")
-
-        # ========================================================================
-        # Task 2: Start background process and monitor it
-        # ========================================================================
-        print("\n" + "=" * 80)
-        print("TASK 2: Start background process counting to 60")
-        print("=" * 80)
-        print("\nSending: 'Start background process, check it multiple times'\n")
-
-        await client.query(
-            "1. Start a background process that counts to 60 and prints once every 5 seconds "
-            "2. Check it multiple times until it's done"
-        )
-
-        async for message in client.receive_response():
-            if isinstance(message, AssistantMessage):
-                for block in message.content:
-                    if isinstance(block, ThinkingBlock):
-                        print(f"[Thinking] {block.thinking[:200]}...")
-                    elif isinstance(block, TextBlock):
-                        print(f"[Agent] {block.text}")
-            elif isinstance(message, ResultMessage):
-                print(f"\n[Result] Task completed in {message.duration_ms}ms")
-                print(f"         Turns: {message.num_turns}, Error: {message.is_error}")
-
-        # ========================================================================
-        # Task 3: Multiple commands (todo, file content, ls)
-        # ========================================================================
-        print("\n" + "=" * 80)
-        print("TASK 3: Multiple commands (todo list, file content, ls)")
-        print("=" * 80)
-        print("\nSending: 'Create todo list, show file content, run ls'\n")
-
-        await client.query(
-            "do the following. "
-            "1. Create a todo list with the first 4 letters of the alphabet "
-            "2. Tell me the content of evaluate.py "
-            "3. Run ls"
-        )
 
         async for message in client.receive_response():
             if isinstance(message, AssistantMessage):

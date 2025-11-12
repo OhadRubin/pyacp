@@ -484,7 +484,9 @@ async def interactive_loop(conn: ClientSideConnection, session_id: str) -> None:
             continue
 
         try:
-            # print(f"[line]: {line}")
+            if not line.strip():
+                continue
+            print(f"[line]: {line}")
             await conn.prompt(
                 PromptRequest(
                     sessionId=session_id,
