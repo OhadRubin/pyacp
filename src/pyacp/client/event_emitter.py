@@ -49,8 +49,8 @@ class EventEmitter:
             sys.stdout.write(json.dumps(payload) + "\n")
             sys.stdout.flush()
         except Exception:
-            # Never let emitting break the flow
-            pass
+            import traceback
+            traceback.print_exc()
 
     def _emit_text(self, text: str) -> None:
         if not text:
@@ -117,4 +117,5 @@ class EventEmitter:
             self._accumulate_chunk("user_message", update.content)
         else:
             self._flush_accumulated_message(trigger="other_update")
-            print(f"[params]: {params}")
+            self._emit_worker_event({"type": f"OtherUpdate:{update.__class__.__name__}", "message": {"update": update.model_dump()}})
+            
