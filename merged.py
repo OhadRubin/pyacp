@@ -1,3 +1,10 @@
+
+# npm install @zed-industries/codex-acp
+# uv add agent-client-protocol
+# npm install -g @zed-industries/claude-code-acp
+#  uv run acp_client.py claude-code-acp
+#  uv run acp_client.py codex-acp
+
 from __future__ import annotations
 import asyncio
 from dataclasses import dataclass, field
@@ -224,11 +231,6 @@ class FileSystemController:
         return ReadTextFileResponse(content=text)
 
 
-# npm install @zed-industries/codex-acp
-# uv add agent-client-protocol
-# npm install -g @zed-industries/claude-code-acp
-#  uv run acp_client.py claude-code-acp
-#  uv run acp_client.py codex-acp
 
 
 
