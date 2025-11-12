@@ -1,3 +1,4 @@
+import asyncio
 import json
 import sys
 
@@ -30,7 +31,8 @@ class MyInMemoryMessageStateStore(InMemoryMessageStateStore):
                 # Fallback for objects with attribute access
                 stop_reason = getattr(result, "stopReason", None)
             if stop_reason == "end_turn":
-                self._client_impl._flush_accumulated_message(trigger="end_turn")
+                # Schedule the async flush and queue end-of-turn sentinel
+                asyncio.create_task(self._client_impl._on_end_turn())
         except Exception:
             # Never let flushing interfere with state resolution
             pass
@@ -44,7 +46,7 @@ class EventEmitter:
         self.state_store = MyInMemoryMessageStateStore(self)
 
     # ------------------------- WorkerFormat emitters -------------------------
-    def _emit_worker_event(self, payload: dict) -> None:
+    async def _emit_worker_event(self, payload: dict) -> None:
         try:
             sys.stdout.write(json.dumps(payload) + "\n")
             sys.stdout.flush()
@@ -52,15 +54,15 @@ class EventEmitter:
             import traceback
             traceback.print_exc()
 
-    def _emit_text(self, text: str) -> None:
+    async def _emit_text(self, text: str) -> None:
         if not text:
             return
-        self._emit_worker_event({"type": "TextBlock", "message": {"text": text}})
+        await self._emit_worker_event({"type": "TextBlock", "message": {"text": text}})
 
-    def _emit_thinking(self, thinking: str) -> None:
+    async def _emit_thinking(self, thinking: str) -> None:
         if not thinking:
             return
-        self._emit_worker_event({"type": "ThinkingBlock", "message": {"thinking": thinking}})
+        await self._emit_worker_event({"type": "ThinkingBlock", "message": {"thinking": thinking}})
     # Accumulation helpers -------------------------------------------------
     def _extract_text(self, content: object) -> str:
         if isinstance(content, TextContentBlock):
@@ -79,10 +81,10 @@ class EventEmitter:
             return str(content.get("text", ""))
         return ""
 
-    def _accumulate_chunk(self, msg_type: str, content: object) -> None:
+    async def _accumulate_chunk(self, msg_type: str, content: object) -> None:
         # Flush if the incoming type differs from current
         if self.current_message_type and msg_type != self.current_message_type:
-            self._flush_accumulated_message(trigger="type_change")
+            await self._flush_accumulated_message(trigger="type_change")
 
         if self.current_message_type != msg_type:
             self.current_message_type = msg_type
@@ -91,13 +93,13 @@ class EventEmitter:
         if text:
             self.accumulated_message += text
 
-    def _flush_accumulated_message(self, trigger: str | None = None) -> None:
+    async def _flush_accumulated_message(self, trigger: str | None = None) -> None:
         if self.accumulated_message:
             msg_type = self.current_message_type or "message"
             if msg_type == "agent_thought":
-                self._emit_thinking(self.accumulated_message)
+                await self._emit_thinking(self.accumulated_message)
             elif msg_type == "agent_message":
-                self._emit_text(self.accumulated_message)
+                await self._emit_text(self.accumulated_message)
             # Deliberately skip emitting user messages to keep only canonical blocks
         # Reset regardless of whether there was content
         self.accumulated_message = ""
@@ -110,12 +112,12 @@ class EventEmitter:
     ) -> None:  # type: ignore[override]
         update = params.update
         if isinstance(update, AgentMessageChunk):
-            self._accumulate_chunk("agent_message", update.content)
+            await self._accumulate_chunk("agent_message", update.content)
         elif isinstance(update, AgentThoughtChunk):
-            self._accumulate_chunk("agent_thought", update.content)
+            await self._accumulate_chunk("agent_thought", update.content)
         elif isinstance(update, UserMessageChunk):
-            self._accumulate_chunk("user_message", update.content)
+            await self._accumulate_chunk("user_message", update.content)
         else:
-            self._flush_accumulated_message(trigger="other_update")
-            self._emit_worker_event({"type": f"OtherUpdate:{update.__class__.__name__}", "message": {"update": update.model_dump()}})
+            await self._flush_accumulated_message(trigger="other_update")
+            await self._emit_worker_event({"type": f"OtherUpdate:{update.__class__.__name__}", "message": {"update": update.model_dump()}})
             

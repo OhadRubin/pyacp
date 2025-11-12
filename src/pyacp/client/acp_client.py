@@ -13,6 +13,7 @@ import json
 import logging
 import os
 import sys
+from datetime import datetime
 from pathlib import Path
 from typing import Iterable, Any
 
@@ -99,6 +100,15 @@ from acp.schema import (
 )
 
 
+def _pick_preferred_option(options: Iterable[PermissionOption]) -> PermissionOption | None:
+    best: PermissionOption | None = None
+    for option in options:
+        if option.kind in {"allow_once", "allow_always"}:
+            return option
+        best = best or option
+    return best
+
+
 # Inlined type definitions from pyacp.types
 
 @dataclass
@@ -118,6 +128,12 @@ class ToolUseBlock:
     id: str
     name: str
     input: dict[str, Any]
+
+@dataclass
+class OtherUpdate:
+    """Other update block."""
+    update_name: str
+    update: dict[str, Any]
 
 @dataclass
 class ToolResultBlock:
@@ -158,7 +174,71 @@ class ResultMessage:
     usage: dict[str, Any] | None = None
     result: str | None = None
 
-Message = Union[UserMessage, AssistantMessage, SystemMessage, ResultMessage]
+@dataclass
+class EndOfTurnMessage:
+    """Sentinel message indicating the agent turn has completed."""
+    pass
+
+Message = Union[UserMessage, AssistantMessage, SystemMessage, ResultMessage, EndOfTurnMessage]
+
+
+
+
+
+
+class _SDKClientImplementation(EventEmitter, TerminalController, FileSystemController, Client):
+    """
+    Internal ACP client implementation that queues messages for PyACPSDKClient.
+
+    This class extends ACPClient to handle ACP protocol events and convert them
+    into Message objects that are queued for consumption by the SDK client.
+    """
+
+    def __init__(self, message_queue: asyncio.Queue[Message]):
+        """
+        Initialize the SDK client implementation.
+
+        Args:
+            message_queue: Queue to put Message objects into
+            model: Model identifier for AssistantMessage objects
+        """
+        super().__init__()
+        self.tool_call_requests = {}
+        self._message_queue = message_queue
+
+
+    async def requestPermission(
+        self,
+        params: RequestPermissionRequest,
+    ) -> RequestPermissionResponse:  # type: ignore[override]
+        option = _pick_preferred_option(params.options)
+        if option is None:
+            return RequestPermissionResponse(outcome=DeniedOutcome(outcome="cancelled"))
+        return RequestPermissionResponse(outcome=AllowedOutcome(optionId=option.optionId, outcome="selected"))
+
+    async def _emit_worker_event(self, payload: dict) -> None:
+
+
+        # Also queue messages for SDK consumption
+        if payload["type"] == "TextBlock":
+            msg = TextBlock(text=payload["message"]["text"])
+        elif payload["type"] == "ThinkingBlock":
+            msg = ThinkingBlock(thinking=payload["message"]["thinking"])
+        elif payload["type"].startswith("OtherUpdate"):
+            msg = OtherUpdate(update_name=payload["type"], update=payload["message"]["update"])
+        else:
+            raise ValueError(f"Unknown message type: {payload['type']}")
+        await self._message_queue.put(msg)
+
+    async def _on_end_turn(self) -> None:
+        """Called when the agent turn completes."""
+        # Flush any accumulated messages
+        await self._flush_accumulated_message(trigger="end_turn")
+        # Queue the end-of-turn sentinel
+        await self._message_queue.put(EndOfTurnMessage())
+
+    
+
 
 
 @dataclass
@@ -251,8 +331,8 @@ class PyACPSDKClient:
         stdout, stdin, proc = await self._transport_cm.__aenter__()
 
         # Create client implementation
-        model = self.options.model or "unknown"
-        self._client_impl = _SDKClientImplementation(self._message_queue, model=model)
+
+        self._client_impl = _SDKClientImplementation(self._message_queue)
 
         # Create connection
         self._connection = ClientSideConnection(
@@ -334,7 +414,7 @@ class PyACPSDKClient:
         session_id: str = "default"
     ) -> None:
         """
-        Send a new request in streaming mode.
+        Send a new request in streaming mode. Returns immediately - messages stream via receive_messages().
 
         Args:
             prompt: The input prompt as a string or async iterable
@@ -344,70 +424,32 @@ class PyACPSDKClient:
             raise RuntimeError("Client not connected. Call connect() first.")
 
         # Convert prompt to ACP format
-        if isinstance(prompt, str):
-            prompt_blocks = [acp_text_block(prompt)]
-        else:
-            # For async iterable, collect all messages
-            prompt_blocks = []
-            async for msg in prompt:
-                if isinstance(msg, dict) and "text" in msg:
-                    prompt_blocks.append(acp_text_block(msg["text"]))
-
-        # Send prompt request
-        await self._connection.prompt(
-            PromptRequest(
-                sessionId=self._session_id,
-                prompt=prompt_blocks,
+        assert isinstance(prompt, str)
+        prompt_blocks = [acp_text_block(prompt)]
+        # Send prompt request without blocking (fire-and-forget)
+        asyncio.create_task(
+            self._connection.prompt(
+                PromptRequest(
+                    sessionId=self._session_id,
+                    prompt=prompt_blocks,
+                )
             )
         )
 
     async def receive_messages(self) -> AsyncIterator[Message]:
         """
-        Receive all messages from agent as an async iterator.
+        Stream messages from agent as they arrive until end-of-turn.
 
         Yields:
-            Message objects from the conversation
+            Message objects from the conversation (excludes EndOfTurnMessage sentinel)
         """
-        while not self._message_queue.empty():
-            yield await self._message_queue.get()
-
-    async def receive_response(self) -> AsyncIterator[Message]:
-        """
-        Receive messages until and including a ResultMessage.
-
-        Yields:
-            Message objects until a ResultMessage is received
-        """
-        if not self._connected:
-            raise RuntimeError("Client not connected")
-
-        # Flush any accumulated messages from the client impl
-        if self._client_impl:
-            self._client_impl._flush()
-
         while True:
-            # Get next message from queue
             message = await self._message_queue.get()
+            if isinstance(message, EndOfTurnMessage):
+                # Turn is complete, stop streaming
+                break
+            message["timestamp"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
             yield message
-
-            if isinstance(message, ResultMessage):
-                break
-
-            # For now, we'll break after getting at least one message
-            # In a full implementation, this would wait for a proper ResultMessage
-            # from the ACP protocol
-            if isinstance(message, AssistantMessage):
-                # Create a synthetic ResultMessage
-                result = ResultMessage(
-                    subtype="success",
-                    duration_ms=0,
-                    duration_api_ms=0,
-                    is_error=False,
-                    num_turns=1,
-                    session_id=self._session_id or "default",
-                )
-                yield result
-                break
 
     async def interrupt(self) -> None:
         """
@@ -421,12 +463,7 @@ class PyACPSDKClient:
         )
 
     async def disconnect(self) -> None:
-        """
-        Disconnect from agent and clean up resources.
-        """
-        # Flush any pending messages
-        if self._client_impl:
-            self._client_impl._flush()
+
 
         if self._connection:
             try:
@@ -449,86 +486,6 @@ class PyACPSDKClient:
 
 
 
-
-
-
-class _SDKClientImplementation(EventEmitter, TerminalController, FileSystemController, Client):
-    """
-    Internal ACP client implementation that queues messages for PyACPSDKClient.
-
-    This class extends ACPClient to handle ACP protocol events and convert them
-    into Message objects that are queued for consumption by the SDK client.
-    """
-
-    def __init__(self, message_queue: asyncio.Queue[Message], model: str = "unknown"):
-        """
-        Initialize the SDK client implementation.
-
-        Args:
-            message_queue: Queue to put Message objects into
-            model: Model identifier for AssistantMessage objects
-        """
-        super().__init__()
-        self.tool_call_requests = {}
-        self._message_queue = message_queue
-        self._model = model
-        self._content_blocks: list[ContentBlock] = []
-
-    def _emit_text(self, text: str) -> None:
-        """Override to queue TextBlock instead of emitting to stdout."""
-        if not text:
-            return
-        self._content_blocks.append(TextBlock(text=text))
-
-    def _emit_thinking(self, thinking: str) -> None:
-        """Override to queue ThinkingBlock instead of emitting to stdout."""
-        if not thinking:
-            return
-        self._content_blocks.append(ThinkingBlock(thinking=thinking))
-
-    def _flush(self) -> None:
-        """Flush accumulated content blocks as an AssistantMessage to the queue."""
-        if self._content_blocks:
-            message = AssistantMessage(
-                content=self._content_blocks.copy(),
-                model=self._model
-            )
-            try:
-                self._message_queue.put_nowait(message)
-            except asyncio.QueueFull:
-                # Queue is full, skip this message
-                pass
-            self._content_blocks.clear()
-
-
-class ACPClient(EventEmitter, TerminalController, FileSystemController, Client):
-    def __init__(self):
-        super().__init__()
-        self.tool_call_requests = {}
-
-
-
-    async def requestPermission(
-        self,
-        params: RequestPermissionRequest,
-    ) -> RequestPermissionResponse:  # type: ignore[override]
-        option = _pick_preferred_option(params.options)
-        if option is None:
-            return RequestPermissionResponse(outcome=DeniedOutcome(outcome="cancelled"))
-        return RequestPermissionResponse(outcome=AllowedOutcome(optionId=option.optionId, outcome="selected"))
-
-
-
-
-
-
-def _pick_preferred_option(options: Iterable[PermissionOption]) -> PermissionOption | None:
-    best: PermissionOption | None = None
-    for option in options:
-        if option.kind in {"allow_once", "allow_always"}:
-            return option
-        best = best or option
-    return best
 
 
 async def interactive_loop(client: PyACPSDKClient) -> None:
@@ -566,27 +523,10 @@ async def interactive_loop(client: PyACPSDKClient) -> None:
                 continue
             print(f"[line]: {line}")
 
-            # Send the query
-            await client.query(line, session_id=client._session_id or "default")
-
-            # Receive and print messages
-            async for message in client.receive_response():
-                if isinstance(message, AssistantMessage):
-                    for block in message.content:
-                        if isinstance(block, TextBlock):
-                            print(block.text)
-                        elif isinstance(block, ThinkingBlock):
-                            print(f"[Thinking]: {block.thinking}")
-                        elif isinstance(block, ToolUseBlock):
-                            print(f"[Tool Use]: {block.name} - {block.input}")
-                        elif isinstance(block, ToolResultBlock):
-                            print(f"[Tool Result]: {block.content}")
-                elif isinstance(message, ResultMessage):
-                    if message.is_error:
-                        print(f"[Error]: {message.result}", file=sys.stderr)
-                    else:
-                        print(f"[Result - {message.num_turns} turns, {message.duration_ms}ms]")
-
+            await client.query(line)
+            async for message in client.receive_messages():
+                
+                print(f"[message in interactive_loop]: {message}")
         except RequestError as err:
             _print_request_error("prompt", err)
         except Exception as exc:  # noqa: BLE001
