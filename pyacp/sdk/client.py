@@ -185,7 +185,11 @@ class _SDKClientImplementation(EventEmitter, TerminalController, FileSystemContr
             message_queue: Queue to put Message objects into
             model: Model identifier for AssistantMessage objects
         """
-        super().__init__()
+        # Initialize all parent classes
+        EventEmitter.__init__(self)
+        TerminalController.__init__(self)
+        # FileSystemController has no __init__, Client.__init__ is handled by EventEmitter chain
+
         self.tool_call_requests = {}
         self._message_queue = message_queue
 

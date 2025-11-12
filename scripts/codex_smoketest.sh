@@ -10,6 +10,11 @@ CMD3="\n do the following. 1. Create a todo list with the first 4 letters of the
 STR_TO_OUTPUT="$CMD1 $CMD2 $CMD3"
 
 
+# Cleanup function to remove codex_home on exit
+cleanup() {
+  rm -rf codex_home
+}
+trap cleanup EXIT
 
 mkdir -p codex_home
 
