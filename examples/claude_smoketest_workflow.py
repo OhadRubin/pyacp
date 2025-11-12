@@ -55,10 +55,17 @@ async def main():
         print("=" * 80)
         print("\nSending: 'please remove all the print statements from mini_terminal.py'\n")
 
+        print("[DEBUG] About to send query...")
         await client.query("please remove all the print statements from mini_terminal.py")
+        print("[DEBUG] Query sent, starting to receive responses...")
 
+        message_count = 0
         async for message in client.receive_response():
+            message_count += 1
+            print(f"[DEBUG] Received message #{message_count}: {type(message).__name__}")
+
             if isinstance(message, AssistantMessage):
+                print(f"[DEBUG] AssistantMessage has {len(message.content)} content blocks")
                 for block in message.content:
                     if isinstance(block, ThinkingBlock):
                         print(f"[Thinking] {block.thinking[:200]}...")
@@ -67,6 +74,8 @@ async def main():
             elif isinstance(message, ResultMessage):
                 print(f"\n[Result] Task completed in {message.duration_ms}ms")
                 print(f"         Turns: {message.num_turns}, Error: {message.is_error}")
+
+        print(f"[DEBUG] Finished receiving responses. Total messages: {message_count}")
 
         print("\n" + "=" * 80)
         print("Workflow Complete!")

@@ -12,6 +12,7 @@ from acp import (
     PROTOCOL_VERSION,
     text_block as acp_text_block,
 )
+from acp.transports import spawn_stdio_transport
 from acp.schema import (
     AgentMessageChunk,
     AgentThoughtChunk,
@@ -127,6 +128,7 @@ class PyACPSDKClient(PyACPClientABC):
         self._stdin_writer: asyncio.StreamWriter | None = None
         self._stdout_reader: asyncio.StreamReader | None = None
         self._transport_task: asyncio.Task | None = None
+        self._transport_cm: object | None = None  # Transport context manager
 
     async def __aenter__(self) -> PyACPSDKClient:
         """Async context manager entry."""
@@ -154,21 +156,19 @@ class PyACPSDKClient(PyACPClientABC):
         # Build environment
         env = {**os.environ, **(self.options.env or {})}
 
-        # Spawn the process
-        self._process = await asyncio.create_subprocess_exec(
+        # Spawn the process using spawn_stdio_transport (handles message reading)
+        self._transport_cm = spawn_stdio_transport(
             program,
             *args,
-            stdin=asyncio.subprocess.PIPE,
-            stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             env=env,
         )
 
-        if not self._process.stdin or not self._process.stdout:
-            raise RuntimeError("Failed to create subprocess with stdin/stdout")
-
-        self._stdin_writer = self._process.stdin
-        self._stdout_reader = self._process.stdout
+        # Enter the context manager
+        stdout, stdin, proc = await self._transport_cm.__aenter__()
+        self._process = proc
+        self._stdin_writer = stdin
+        self._stdout_reader = stdout
 
         # Create client implementation
         self._client_impl = _SDKClientImplementation(self._message_queue)
@@ -176,8 +176,8 @@ class PyACPSDKClient(PyACPClientABC):
         # Create connection
         self._connection = ClientSideConnection(
             lambda _agent: self._client_impl,
-            self._stdin_writer,
-            self._stdout_reader,
+            stdin,
+            stdout,
             state_store=InMemoryMessageStateStore(),
         )
 
@@ -320,17 +320,15 @@ class PyACPSDKClient(PyACPClientABC):
                 pass
             self._connection = None
 
-        if self._process:
+        # Exit transport context manager (handles process cleanup)
+        if self._transport_cm:
             try:
-                self._process.terminate()
-                await asyncio.wait_for(self._process.wait(), timeout=5.0)
-            except asyncio.TimeoutError:
-                self._process.kill()
-                await self._process.wait()
+                await self._transport_cm.__aexit__(None, None, None)
             except Exception:
                 pass
-            self._process = None
+            self._transport_cm = None
 
+        self._process = None
         self._connected = False
         self._session_id = None
         self._client_impl = None
