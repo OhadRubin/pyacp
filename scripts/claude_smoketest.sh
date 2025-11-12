@@ -7,6 +7,7 @@ rm mini_terminal.py
 cp mini_terminal_w_prints.py  mini_terminal.py 
 
 CMD1="please remove all the print statements from mini_terminal.py"
+# CMD1="please start a background process that counts to 60 and prints once every 5 seconds. check it multiple times until it's done"
 CMD2="\n"
 CMD3=$'\x03'  # Send a Ctrl+C character
 STR_TO_OUTPUT="$CMD1 $CMD2 $CMD3"

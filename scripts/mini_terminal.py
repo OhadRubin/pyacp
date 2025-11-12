@@ -32,6 +32,7 @@ async def test_shell_command():
     stdout, stderr = await process.communicate()
 
     # Test 3: Echo command
+    print("Test 3: Echo with variable")
     cmd = ['/bin/sh', '-c', 'echo "Hello from shell: $USER"']
 
     process = await asyncio.create_subprocess_exec(
@@ -54,6 +55,7 @@ async def test_shell_command():
     stdout, stderr = await process.communicate()
 
     # Test 5: Piping
+    print("Test 5: Piping commini_terminal.pymands")
     cmd = ['/bin/sh', '-c', 'echo -e "apple\\nbanana\\ncherry" | grep "an"']
 
     process = await asyncio.create_subprocess_exec(

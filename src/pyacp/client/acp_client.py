@@ -89,6 +89,8 @@ from typing import Dict, Any
 from dataclasses import dataclass, field
 import uuid
 from pyacp.utils.terminal import TerminalInfo
+from pyacp.client.event_emitter import EventEmitter
+from pyacp.client.terminal_controller import TerminalController
 
 
 class MyInMemoryMessageStateStore(InMemoryMessageStateStore):
@@ -116,7 +118,7 @@ class MyInMemoryMessageStateStore(InMemoryMessageStateStore):
 
 
 
-class ACPClient(Client):
+class ACPClient(EventEmitter, TerminalController, Client):
     def __init__(self):
         self.accumulated_message = ""
         self.current_message_type = None
@@ -127,24 +129,7 @@ class ACPClient(Client):
         self._terminal_counter = 0
         self.tool_call_requests = {}
 
-    # ------------------------- WorkerFormat emitters -------------------------
-    def _emit_worker_event(self, payload: dict) -> None:
-        try:
-            sys.stdout.write(json.dumps(payload) + "\n")
-            sys.stdout.flush()
-        except Exception:
-            # Never let emitting break the flow
-            pass
 
-    def _emit_text(self, text: str) -> None:
-        if not text:
-            return
-        self._emit_worker_event({"type": "TextBlock", "message": {"text": text}})
-
-    def _emit_thinking(self, thinking: str) -> None:
-        if not thinking:
-            return
-        self._emit_worker_event({"type": "ThinkingBlock", "message": {"thinking": thinking}})
 
     async def requestPermission(
         self,
@@ -197,250 +182,7 @@ class ACPClient(Client):
             self._flush_accumulated_message(trigger="other_update")
             print(f"[params]: {params}")
 
-    # Accumulation helpers -------------------------------------------------
-    def _extract_text(self, content: object) -> str:
-        if isinstance(content, TextContentBlock):
-            return content.text
-        if isinstance(content, ResourceContentBlock):
-            return content.name or content.uri or ""
-        if isinstance(content, EmbeddedResourceContentBlock):
-            resource = content.resource
-            text = getattr(resource, "text", None)
-            if text:
-                return text
-            blob = getattr(resource, "blob", None)
-            return blob or ""
-        if isinstance(content, dict):
-            # Attempt to pull text field if present
-            return str(content.get("text", ""))
-        return ""
 
-    def _accumulate_chunk(self, msg_type: str, content: object) -> None:
-        # Flush if the incoming type differs from current
-        if self.current_message_type and msg_type != self.current_message_type:
-            self._flush_accumulated_message(trigger="type_change")
-
-        if self.current_message_type != msg_type:
-            self.current_message_type = msg_type
-
-        text = self._extract_text(content)
-        if text:
-            self.accumulated_message += text
-
-    def _flush_accumulated_message(self, trigger: str | None = None) -> None:
-        if self.accumulated_message:
-            msg_type = self.current_message_type or "message"
-            if msg_type == "agent_thought":
-                self._emit_thinking(self.accumulated_message)
-            elif msg_type == "agent_message":
-                self._emit_text(self.accumulated_message)
-            # Deliberately skip emitting user messages to keep only canonical blocks
-        # Reset regardless of whether there was content
-        self.accumulated_message = ""
-        self.current_message_type = None
-
-    # Optional / terminal-related methods ---------------------------------
-    async def _capture_terminal_output(self, terminal_info: TerminalInfo) -> None:
-        """Background task to capture stdout and stderr from a terminal process."""
-        try:
-            # Capture both stdout and stderr
-            tasks = []
-            if terminal_info.process.stdout:
-                tasks.append(self._read_stream(terminal_info, terminal_info.process.stdout))
-            if terminal_info.process.stderr:
-                tasks.append(self._read_stream(terminal_info, terminal_info.process.stderr))
-
-            if tasks:
-                await asyncio.gather(*tasks)
-
-            # Wait for process to complete and capture exit status
-            await terminal_info.process.wait()
-
-            # Determine exit status
-            if terminal_info.process.returncode is not None:
-                if terminal_info.process.returncode < 0:
-                    # Negative return codes typically indicate signals
-                    import signal
-                    try:
-                        sig = signal.Signals(-terminal_info.process.returncode)
-                        terminal_info.signal = sig.name
-                    except (ValueError, AttributeError):
-                        terminal_info.signal = f"SIGNAL_{-terminal_info.process.returncode}"
-                else:
-                    terminal_info.exit_code = terminal_info.process.returncode
-
-        except Exception:
-            pass
-
-    async def _read_stream(self, terminal_info: TerminalInfo, stream: asyncio.StreamReader) -> None:
-        """Read from a stream and add to terminal output buffer."""
-        try:
-            while True:
-                chunk = await stream.read(4096)
-                if not chunk:
-                    break
-                terminal_info.add_output(chunk)
-        except Exception:
-            pass
-
-    async def createTerminal(
-        self,
-        params: CreateTerminalRequest,
-    ) -> CreateTerminalResponse:  # type: ignore[override]
-        # Generate unique terminal ID
-        self._terminal_counter += 1
-        terminal_id = f"term_{uuid.uuid4().hex[:8]}_{self._terminal_counter}"
-
-        # Build environment
-        env = dict(os.environ)
-        if params.env:
-            for env_var in params.env:
-                env[env_var.name] = env_var.value
-
-        # Build command - always run through shell like a real terminal
-        full_command = params.command
-        if params.args:
-            full_command += ' ' + ' '.join(params.args)
-        cmd = ['/bin/sh', '-c', full_command]
-
-        # Determine working directory
-        cwd = params.cwd if params.cwd else os.getcwd()
-
-        try:
-            # Spawn the process
-            process = await asyncio.create_subprocess_exec(
-                *cmd,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-                cwd=cwd,
-                env=env,
-            )
-
-            # Create terminal info
-            terminal_info = TerminalInfo(
-                terminal_id=terminal_id,
-                process=process,
-                output_byte_limit=params.outputByteLimit,
-            )
-
-            # Start background task to capture output
-            terminal_info._output_task = asyncio.create_task(
-                self._capture_terminal_output(terminal_info)
-            )
-
-            # Register terminal
-            self.terminals[terminal_id] = terminal_info
-
-            return CreateTerminalResponse(terminalId=terminal_id)
-
-        except Exception as exc:
-            raise RequestError.internal_error({"message": f"Failed to create terminal: {exc}"})
-
-    async def terminalOutput(
-        self,
-        params: TerminalOutputRequest,
-    ) -> TerminalOutputResponse:  # type: ignore[override]
-        terminal_info = self.terminals.get(params.terminalId)
-        if not terminal_info:
-            raise RequestError.invalid_params({
-                "terminalId": params.terminalId,
-                "reason": "Terminal not found"
-            })
-
-        output = terminal_info.get_output()
-
-        # Build response
-        response_data = {
-            "output": output,
-            "truncated": terminal_info.truncated,
-        }
-
-        # Add exit status if process has completed
-        if terminal_info.exit_code is not None or terminal_info.signal is not None:
-            response_data["exitStatus"] = {
-                "exitCode": terminal_info.exit_code,
-                "signal": terminal_info.signal,
-            }
-
-        return TerminalOutputResponse(**response_data)
-
-    async def releaseTerminal(
-        self,
-        params: ReleaseTerminalRequest,
-    ) -> ReleaseTerminalResponse:  # type: ignore[override]
-        terminal_info = self.terminals.get(params.terminalId)
-        if not terminal_info:
-            raise RequestError.invalid_params({
-                "terminalId": params.terminalId,
-                "reason": "Terminal not found"
-            })
-
-        # Kill the process if it's still running
-        if terminal_info.process.returncode is None:
-            try:
-                terminal_info.process.kill()
-                # Wait briefly for the process to terminate
-                try:
-                    await asyncio.wait_for(terminal_info.process.wait(), timeout=2.0)
-                except asyncio.TimeoutError:
-                    pass
-            except Exception as exc:
-                pass
-
-        # Cancel the output capture task if it's still running
-        if terminal_info._output_task and not terminal_info._output_task.done():
-            terminal_info._output_task.cancel()
-            try:
-                await terminal_info._output_task
-            except asyncio.CancelledError:
-                pass
-            except Exception:
-                pass
-
-        # Remove from registry
-        del self.terminals[params.terminalId]
-
-        return ReleaseTerminalResponse()
-
-    async def waitForTerminalExit(
-        self,
-        params: WaitForTerminalExitRequest,
-    ) -> WaitForTerminalExitResponse:  # type: ignore[override]
-        terminal_info = self.terminals.get(params.terminalId)
-        if not terminal_info:
-            raise RequestError.invalid_params({
-                "terminalId": params.terminalId,
-                "reason": "Terminal not found"
-            })
-
-        # Wait for the process to complete
-        await terminal_info.process.wait()
-
-        return WaitForTerminalExitResponse(
-            exitCode=terminal_info.exit_code,
-            signal=terminal_info.signal
-        )
-
-    async def killTerminal(
-        self,
-        params: KillTerminalCommandRequest,
-    ) -> KillTerminalCommandResponse:  # type: ignore[override]
-        terminal_info = self.terminals.get(params.terminalId)
-        if not terminal_info:
-            raise RequestError.invalid_params({
-                "terminalId": params.terminalId,
-                "reason": "Terminal not found"
-            })
-
-        # Kill the process if it's still running
-        if terminal_info.process.returncode is None:
-            try:
-                terminal_info.process.kill()
-                pass
-            except Exception:
-                pass
-
-        return KillTerminalCommandResponse()
 
 
 def _pick_preferred_option(options: Iterable[PermissionOption]) -> PermissionOption | None:
