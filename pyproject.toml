@@ -1,5 +1,5 @@
 [project]
-name = "pyacp"
+name = "simple-acp-client"
 version = "0.1.0"
 description = "Python SDK for the Agent Client Protocol (ACP) - Build powerful agent-based applications with streaming, terminal, and filesystem capabilities"
 readme = "README.md"
