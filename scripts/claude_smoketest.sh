@@ -1,7 +1,5 @@
 #!/bin/bash
 
-# Change to script directory
-# cd "$(dirname "$0")" || exit 1
 
 rm scripts/mini_terminal.py
 cp scripts/mini_terminal_w_prints.py  scripts/mini_terminal.py 
