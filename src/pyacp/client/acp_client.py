@@ -67,7 +67,6 @@ from acp.schema import (
     WriteTextFileResponse,
 )
 from acp.contrib.session_state import SessionAccumulator
-from acp.task.state import InMemoryMessageStateStore
 
 #!/usr/bin/env python3
 """
@@ -88,31 +87,10 @@ from typing import Dict, Any
 
 from dataclasses import dataclass, field
 import uuid
-from pyacp.utils.terminal import TerminalInfo
 from pyacp.client.event_emitter import EventEmitter
 from pyacp.client.terminal_controller import TerminalController
 
 
-class MyInMemoryMessageStateStore(InMemoryMessageStateStore):
-    def __init__(self, client_impl: "ACPClient"):
-        super().__init__()
-        self._client_impl = client_impl
-
-    def resolve_outgoing(self, request_id: int, result):
-        # Flush accumulated message when a turn ends
-        try:
-            stop_reason = None
-            if isinstance(result, dict):
-                stop_reason = result.get("stopReason")
-            else:
-                # Fallback for objects with attribute access
-                stop_reason = getattr(result, "stopReason", None)
-            if stop_reason == "end_turn":
-                self._client_impl._flush_accumulated_message(trigger="end_turn")
-        except Exception:
-            # Never let flushing interfere with state resolution
-            pass
-        super().resolve_outgoing(request_id, result)
 
 
 
@@ -120,13 +98,7 @@ class MyInMemoryMessageStateStore(InMemoryMessageStateStore):
 
 class ACPClient(EventEmitter, TerminalController, Client):
     def __init__(self):
-        self.accumulated_message = ""
-        self.current_message_type = None
-
-
-        # Terminal management
-        self.terminals: dict[str, TerminalInfo] = {}
-        self._terminal_counter = 0
+        super().__init__()
         self.tool_call_requests = {}
 
 
@@ -166,21 +138,6 @@ class ACPClient(EventEmitter, TerminalController, Client):
         return ReadTextFileResponse(content=text)
 
 
-
-    async def sessionUpdate(
-        self,
-        params: SessionNotification,
-    ) -> None:  # type: ignore[override]
-        update = params.update
-        if isinstance(update, AgentMessageChunk):
-            self._accumulate_chunk("agent_message", update.content)
-        elif isinstance(update, AgentThoughtChunk):
-            self._accumulate_chunk("agent_thought", update.content)
-        elif isinstance(update, UserMessageChunk):
-            self._accumulate_chunk("user_message", update.content)
-        else:
-            self._flush_accumulated_message(trigger="other_update")
-            print(f"[params]: {params}")
 
 
 
@@ -271,7 +228,7 @@ async def run(argv: list[str]) -> int:
                 lambda _agent: client_impl,
                 stdin,
                 stdout,
-                state_store=MyInMemoryMessageStateStore(client_impl),
+                state_store=client_impl.state_store,
             )
 
             try:

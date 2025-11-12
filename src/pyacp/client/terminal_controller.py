@@ -19,6 +19,10 @@ from pyacp.utils.terminal import TerminalInfo
 
 
 class TerminalController:
+    def __init__(self):
+        # Terminal management
+        self.terminals: dict[str, TerminalInfo] = {}
+        self._terminal_counter = 0
 
     # Optional / terminal-related methods ---------------------------------
     async def _capture_terminal_output(self, terminal_info: TerminalInfo) -> None:
