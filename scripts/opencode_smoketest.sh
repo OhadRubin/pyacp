@@ -1,5 +1,8 @@
 #!/bin/bash
 
+# Change to script directory
+cd "$(dirname "$0")" || exit 1
+
 # git checkout -- mini_terminal.py
 rm mini_terminal.py
 cp mini_terminal_w_prints.py  mini_terminal.py   
@@ -76,4 +79,4 @@ export MAX_THINKING_TOKENS=10000
 
 export ACP_MODEL="openrouter/gemini-2.5-pro"
 
-printf "$STR_TO_OUTPUT" | uv run acp_client.py opencode acp
+printf "$STR_TO_OUTPUT" | uv run python -m pyacp.client.acp_client opencode acp

@@ -1,5 +1,8 @@
 #!/bin/bash
 
+# Change to script directory
+cd "$(dirname "$0")" || exit 1
+
 # git checkout -- mini_terminal.py
 rm mini_terminal.py
 cp mini_terminal_w_prints.py  mini_terminal.py 
@@ -13,5 +16,5 @@ export GOOGLE_GEMINI_BASE_URL="http://localhost:4000"
 export GEMINI_API_KEY=sk-1234
 
 
-printf "$STR_TO_OUTPUT" | uv run acp_client.py gemini --experimental-acp --yolo --allowed-tools run_shell_command -m gemini-2.5-pro
+printf "$STR_TO_OUTPUT" | uv run python -m pyacp.client.acp_client gemini --experimental-acp --yolo --allowed-tools run_shell_command -m gemini-2.5-pro
 
