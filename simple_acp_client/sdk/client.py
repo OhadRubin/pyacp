@@ -1,4 +1,13 @@
+
 from __future__ import annotations
+
+import asyncio
+import asyncio.subprocess as aio_subprocess
+import contextlib
+import os
+from collections.abc import AsyncIterator, Mapping
+from contextlib import asynccontextmanager
+from pathlib import Path
 
 import asyncio
 import asyncio.subprocess
@@ -18,7 +27,7 @@ from acp import (
     RequestError,
     text_block as acp_text_block,
 )
-from acp.transports import spawn_stdio_transport
+from acp.transports import default_environment
 from acp.schema import (
     AllowedOutcome,
     CancelNotification,
@@ -245,6 +254,72 @@ class PyACPAgentOptions:
     agent_args: list[str] = field(default_factory=list)  # Args for agent
 
 
+
+
+from contextlib import asynccontextmanager
+
+@asynccontextmanager
+async def my_spawn_stdio_transport(
+    command: str,
+    *args: str,
+    env: Mapping[str, str] | None = None,
+    cwd: str | Path | None = None,
+    stderr: int | None = aio_subprocess.PIPE,
+    shutdown_timeout: float = 2.0,
+) -> AsyncIterator[tuple[asyncio.StreamReader, asyncio.StreamWriter, aio_subprocess.Process]]:
+    """Launch a subprocess and expose its stdio streams as asyncio transports.
+
+    This mirrors the defensive shutdown behaviour used by the MCP Python SDK:
+    close stdin first, wait for graceful exit, then escalate to terminate/kill.
+    """
+    merged_env = dict(default_environment())
+    if env:
+        merged_env.update(env)
+
+    process = await asyncio.create_subprocess_exec(
+        command,
+        *args,
+        stdin=aio_subprocess.PIPE,
+        stdout=aio_subprocess.PIPE,
+        stderr=stderr,
+        env=merged_env,
+        cwd=str(cwd) if cwd is not None else None,
+        limit=10 * 1024 * 1024  # 10MB buffer limit to handle large ACP messages
+    )
+
+    if process.stdout is None or process.stdin is None:
+        process.kill()
+        await process.wait()
+        msg = "spawn_stdio_transport requires stdout/stderr pipes"
+        raise RuntimeError(msg)
+
+    try:
+        yield process.stdout, process.stdin, process
+    finally:
+        # Attempt graceful stdin shutdown first
+        if process.stdin is not None:
+            try:
+                process.stdin.write_eof()
+            except (AttributeError, OSError, RuntimeError):
+                process.stdin.close()
+            with contextlib.suppress(Exception):
+                await process.stdin.drain()
+            with contextlib.suppress(Exception):
+                process.stdin.close()
+            with contextlib.suppress(Exception):
+                await process.stdin.wait_closed()
+
+        try:
+            await asyncio.wait_for(process.wait(), timeout=shutdown_timeout)
+        except asyncio.TimeoutError:
+            process.terminate()
+            try:
+                await asyncio.wait_for(process.wait(), timeout=shutdown_timeout)
+            except asyncio.TimeoutError:
+                process.kill()
+                await process.wait()
+
+
 class PyACPSDKClient:
     """
     High-level SDK client that maintains conversation sessions across multiple exchanges.
@@ -312,7 +387,7 @@ class PyACPSDKClient:
             spawn_args = agent_command[1:] if len(agent_command) > 1 else []
 
         # Spawn the agent process
-        self._transport_cm = spawn_stdio_transport(
+        self._transport_cm = my_spawn_stdio_transport(
             spawn_program,
             *spawn_args,
             stderr=asyncio.subprocess.PIPE,
