@@ -310,7 +310,7 @@ class PyACPSDKClient:
             spawn_program,
             *spawn_args,
             stderr=asyncio.subprocess.PIPE,
-            env={**os.environ},
+            env={**os.environ, **self.options.env},
         )
 
         # Enter the transport context manager
