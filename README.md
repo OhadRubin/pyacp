@@ -5,7 +5,7 @@
 ## Features
 
 - A familiar interface similar to [Claude Agent SDK](https://docs.claude.com/en/docs/agent-sdk/overview)
-- Can be used with any ACP compatible executable such as Claude Code (via the Zed adapter), Codex-CLI (via the Zed adapter), Gemini CLI or OpenCode.
+- Can be used with any ACP compatible executable such as [Claude Code (via the Zed adapter)](https://github.com/zed-industries/claude-code-acp), [Codex-CLI (via the Zed adapter)](https://github.com/zed-industries/codex-acp), Gemini CLI, or OpenCode.
   
 ## Requirements
 
@@ -124,4 +124,4 @@ PyACP is compatible with ACP agents that implement the Agent Client Protocol. Po
 - **Claude Code ACP**: `npm install -g @zed-industries/claude-code-acp`
 
 # TODO
-Right now the code in scripts always gives full capabilities to the agent, so only run it in docker/heavy sandboxing.
+- Right now the code in scripts always gives full capabilities to the agent, so only run it in docker/heavy sandboxing.
