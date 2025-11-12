@@ -80,9 +80,6 @@ Only these content block types are emitted:
 
 # Removed old ACP-to-worker converter and logging handler classes; emission happens inline in ACPClient
 
-from pyacp.types.messages import Message, AssistantMessage, ResultMessage
-from pyacp.types.content import TextBlock, ThinkingBlock, ContentBlock
-
 
 
 from pyacp.client.event_emitter import EventEmitter
@@ -91,7 +88,7 @@ from pyacp.client.file_system_controller import FileSystemController
 
 
 from dataclasses import dataclass, field
-from typing import AsyncIterable, Iterable
+from typing import AsyncIterable, Iterable, Union, AsyncIterator
 import asyncio
 from pathlib import Path
 
@@ -100,10 +97,68 @@ from acp.schema import (
     DeniedOutcome,
     AllowedOutcome,
 )
-from pyacp.types.messages import PermissionOption
-from acp.client import Client, ClientSideConnection
 
-from typing import AsyncIterator
+
+# Inlined type definitions from pyacp.types
+
+@dataclass
+class TextBlock:
+    """Text content block."""
+    text: str
+
+@dataclass
+class ThinkingBlock:
+    """Thinking content block (for models with thinking capability)."""
+    thinking: str
+    signature: str = ""
+
+@dataclass
+class ToolUseBlock:
+    """Tool use request block."""
+    id: str
+    name: str
+    input: dict[str, Any]
+
+@dataclass
+class ToolResultBlock:
+    """Tool execution result block."""
+    tool_use_id: str
+    content: str | list[dict[str, Any]] | None = None
+    is_error: bool | None = None
+
+ContentBlock = Union[TextBlock, ThinkingBlock, ToolUseBlock, ToolResultBlock]
+
+@dataclass
+class UserMessage:
+    """User input message."""
+    content: str | list[ContentBlock]
+
+@dataclass
+class AssistantMessage:
+    """Assistant response message with content blocks."""
+    content: list[ContentBlock]
+    model: str
+
+@dataclass
+class SystemMessage:
+    """System message with metadata."""
+    subtype: str
+    data: dict[str, Any]
+
+@dataclass
+class ResultMessage:
+    """Final result message with cost and usage information."""
+    subtype: str
+    duration_ms: int
+    duration_api_ms: int
+    is_error: bool
+    num_turns: int
+    session_id: str
+    total_cost_usd: float | None = None
+    usage: dict[str, Any] | None = None
+    result: str | None = None
+
+Message = Union[UserMessage, AssistantMessage, SystemMessage, ResultMessage]
 
 
 @dataclass
@@ -279,6 +334,55 @@ class PyACPSDKClient:
 
 
 
+
+
+class _SDKClientImplementation(EventEmitter, TerminalController, FileSystemController, Client):
+    """
+    Internal ACP client implementation that queues messages for PyACPSDKClient.
+
+    This class extends ACPClient to handle ACP protocol events and convert them
+    into Message objects that are queued for consumption by the SDK client.
+    """
+
+    def __init__(self, message_queue: asyncio.Queue[Message], model: str = "unknown"):
+        """
+        Initialize the SDK client implementation.
+
+        Args:
+            message_queue: Queue to put Message objects into
+            model: Model identifier for AssistantMessage objects
+        """
+        super().__init__()
+        self.tool_call_requests = {}
+        self._message_queue = message_queue
+        self._model = model
+        self._content_blocks: list[ContentBlock] = []
+
+    def _emit_text(self, text: str) -> None:
+        """Override to queue TextBlock instead of emitting to stdout."""
+        if not text:
+            return
+        self._content_blocks.append(TextBlock(text=text))
+
+    def _emit_thinking(self, thinking: str) -> None:
+        """Override to queue ThinkingBlock instead of emitting to stdout."""
+        if not thinking:
+            return
+        self._content_blocks.append(ThinkingBlock(thinking=thinking))
+
+    def _flush(self) -> None:
+        """Flush accumulated content blocks as an AssistantMessage to the queue."""
+        if self._content_blocks:
+            message = AssistantMessage(
+                content=self._content_blocks.copy(),
+                model=self._model
+            )
+            try:
+                self._message_queue.put_nowait(message)
+            except asyncio.QueueFull:
+                # Queue is full, skip this message
+                pass
+            self._content_blocks.clear()
 
 
 class ACPClient(EventEmitter, TerminalController, FileSystemController, Client):

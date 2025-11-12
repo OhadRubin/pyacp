@@ -8,7 +8,6 @@ ACP-compatible agents.
 __version__ = "0.1.0"
 
 # Import and export public API
-from pyacp.client.sdk_client import PyACPSDKClient, query
 from pyacp.types.messages import (
     UserMessage,
     AssistantMessage,
@@ -23,11 +22,7 @@ from pyacp.types.content import (
     ToolResultBlock,
     ContentBlock,
 )
-from pyacp.types.options import (
-    PyACPAgentOptions,
-    PermissionMode,
-    SystemPromptPreset,
-)
+
 
 __all__ = [
     # Main client
@@ -47,6 +42,4 @@ __all__ = [
     "ContentBlock",
     # Options
     "PyACPAgentOptions",
-    "PermissionMode",
-    "SystemPromptPreset",
 ]
