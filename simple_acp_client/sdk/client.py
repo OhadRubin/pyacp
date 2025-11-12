@@ -5,6 +5,7 @@ import asyncio.subprocess
 import json
 import os
 import sys
+import time
 from datetime import datetime
 from pathlib import Path
 from typing import Iterable, AsyncIterable, Union, AsyncIterator, Any
@@ -46,6 +47,7 @@ from simple_acp_client.core import (
     ThinkingBlock,
     OtherUpdate,
     EndOfTurnMessage,
+    ResultMessage,
     Message,
 )
 from simple_acp_client.capabilities.filesystem import FileSystemController
@@ -265,6 +267,10 @@ class PyACPSDKClient:
         self._connected = False
         self._transport_cm = None  # Context manager for the transport
 
+        # Timing and turn tracking
+        self._turn_start_time: float | None = None
+        self._turn_count: int = 0
+
 
     async def __aenter__(self):
         """Async context manager entry."""
@@ -408,6 +414,10 @@ class PyACPSDKClient:
         if not self._connected or not self._connection or not self._session_id:
             raise RuntimeError("Client not connected. Call connect() first.")
 
+        # Record turn start time and increment counter
+        self._turn_start_time = time.time()
+        self._turn_count += 1
+
         # Convert prompt to ACP format
         assert isinstance(prompt, str)
         prompt_blocks = [acp_text_block(prompt)]
@@ -426,8 +436,9 @@ class PyACPSDKClient:
         Stream messages from agent as they arrive until end-of-turn.
 
         Yields:
-            Message objects from the conversation (excludes EndOfTurnMessage sentinel)
+            Message objects from the conversation, with ResultMessage as the final message
         """
+        last_message = None
         while True:
             message = await self._message_queue.get()
             if isinstance(message, EndOfTurnMessage):
@@ -435,6 +446,35 @@ class PyACPSDKClient:
                 break
             setattr(message, "timestamp", datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")[:-3])
             yield message
+            last_message = message
+
+        # Calculate timing
+        turn_end_time = time.time()
+        duration_ms = int((turn_end_time - self._turn_start_time) * 1000) if self._turn_start_time else 0
+
+        # Extract result from last message
+        result_text = None
+        if last_message:
+            if isinstance(last_message, TextBlock):
+                result_text = last_message.text
+            elif isinstance(last_message, ThinkingBlock):
+                result_text = last_message.thinking
+            elif isinstance(last_message, OtherUpdate):
+                result_text = f"{last_message.update_name}: {last_message.update}"
+
+        # Create and yield ResultMessage as final message
+        result_message = ResultMessage(
+            subtype="final",
+            duration_ms=duration_ms,
+            duration_api_ms=duration_ms,  # We don't separate API time, so use same value
+            is_error=False,
+            num_turns=self._turn_count,
+            session_id=self._session_id or "",
+            result=result_text,
+            usage=None,
+            total_cost_usd=None,
+        )
+        yield result_message
 
     async def interrupt(self) -> None:
         """
