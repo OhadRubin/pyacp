@@ -20,7 +20,7 @@ export ANTHROPIC_BASE_URL="http://0.0.0.0:4000"
 export ANTHROPIC_AUTH_TOKEN="sk-1234"
 export ACP_MODEL=$ANTHROPIC_MODEL
 
-printf "$STR_TO_OUTPUT" | uv run merged.py claude-code-acp
+printf "$STR_TO_OUTPUT" | uv run python -m examples.interactive claude-code-acp
 
 
 
