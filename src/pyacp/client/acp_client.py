@@ -76,7 +76,6 @@ Only these content block types are emitted:
 - TextBlock, ThinkingBlock, ToolUseBlock, ToolResultBlock, ContentBlock
 """
 
-from typing import Dict, Any
 
 
 # Removed old ACP-to-worker converter and logging handler classes; emission happens inline in ACPClient
@@ -85,10 +84,9 @@ from typing import Dict, Any
 
 
 
-from dataclasses import dataclass, field
-import uuid
 from pyacp.client.event_emitter import EventEmitter
 from pyacp.client.terminal_controller import TerminalController
+from pyacp.client.file_system_controller import FileSystemController
 
 
 
@@ -96,7 +94,7 @@ from pyacp.client.terminal_controller import TerminalController
 
 
 
-class ACPClient(EventEmitter, TerminalController, Client):
+class ACPClient(EventEmitter, TerminalController, FileSystemController, Client):
     def __init__(self):
         super().__init__()
         self.tool_call_requests = {}
@@ -112,31 +110,6 @@ class ACPClient(EventEmitter, TerminalController, Client):
             return RequestPermissionResponse(outcome=DeniedOutcome(outcome="cancelled"))
         return RequestPermissionResponse(outcome=AllowedOutcome(optionId=option.optionId, outcome="selected"))
 
-    async def writeTextFile(
-        self,
-        params: WriteTextFileRequest,
-    ) -> WriteTextFileResponse:  # type: ignore[override]
-        path = Path(params.path)
-        if not path.is_absolute():
-            raise RequestError.invalid_params({"path": params.path, "reason": "path must be absolute"})
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(params.content)
-        # Intentionally quiet; WorkerFormat emission handled elsewhere
-        return WriteTextFileResponse()
-
-    async def readTextFile(
-        self,
-        params: ReadTextFileRequest,
-    ) -> ReadTextFileResponse:  # type: ignore[override]
-        path = Path(params.path)
-        if not path.is_absolute():
-            raise RequestError.invalid_params({"path": params.path, "reason": "path must be absolute"})
-        text = path.read_text()
-        # Intentionally quiet; WorkerFormat emission handled via hooks
-        if params.line is not None or params.limit is not None:
-            text = _slice_text(text, params.line, params.limit)
-        return ReadTextFileResponse(content=text)
-
 
 
 
@@ -149,17 +122,6 @@ def _pick_preferred_option(options: Iterable[PermissionOption]) -> PermissionOpt
             return option
         best = best or option
     return best
-
-
-def _slice_text(content: str, line: int | None, limit: int | None) -> str:
-    lines = content.splitlines()
-    start = 0
-    if line:
-        start = max(line - 1, 0)
-    end = len(lines)
-    if limit:
-        end = min(start + limit, end)
-    return "\n".join(lines[start:end])
 
 
 async def interactive_loop(conn: ClientSideConnection, session_id: str) -> None:
