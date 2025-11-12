@@ -1,5 +1,8 @@
 #!/bin/bash
 
+# Change to script directory
+cd "$(dirname "$0")" || exit 1
+
 # git checkout -- mini_terminal.py
 rm mini_terminal.py
 cp mini_terminal_w_prints.py  mini_terminal.py   
