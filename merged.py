@@ -1,5 +1,137 @@
+from __future__ import annotations
 import asyncio
 from dataclasses import dataclass, field
+
+
+import asyncio
+import asyncio.subprocess
+import contextlib
+import json
+import logging
+import os
+import sys
+from datetime import datetime
+from pathlib import Path
+from typing import Iterable, Any
+
+
+from acp import (
+    Client,
+    ClientSideConnection,
+    PROTOCOL_VERSION,
+    RequestError,
+    text_block as acp_text_block,
+)
+from acp.transports import spawn_stdio_transport
+from acp.schema import (
+    AgentMessageChunk,
+    AgentPlanUpdate,
+    AgentThoughtChunk,
+    AllowedOutcome,
+    CancelNotification,
+    ClientCapabilities,
+    FileEditToolCallContent,
+    FileSystemCapability,
+    CreateTerminalRequest,
+    CreateTerminalResponse,
+    DeniedOutcome,
+    EmbeddedResourceContentBlock,
+    KillTerminalCommandRequest,
+    KillTerminalCommandResponse,
+    InitializeRequest,
+    SetSessionModelRequest,
+    NewSessionRequest,
+    PermissionOption,
+    PromptRequest,
+    ReadTextFileRequest,
+    ReadTextFileResponse,
+    RequestPermissionRequest,
+    RequestPermissionResponse,
+    ResourceContentBlock,
+    ReleaseTerminalRequest,
+    ReleaseTerminalResponse,
+    SessionNotification,
+    TerminalToolCallContent,
+    TerminalOutputRequest,
+    TerminalOutputResponse,
+    ContentToolCallContent,
+    TextContentBlock,
+    ToolCallProgress,
+    ToolCallStart,
+    UserMessageChunk,
+    WaitForTerminalExitRequest,
+    WaitForTerminalExitResponse,
+    WriteTextFileRequest,
+    WriteTextFileResponse,
+)
+from acp.contrib.session_state import SessionAccumulator
+
+
+
+
+
+
+
+
+
+
+from dataclasses import dataclass, field
+from typing import AsyncIterable, Iterable, Union, AsyncIterator
+import asyncio
+from pathlib import Path
+
+from acp.schema import (
+    CancelNotification,
+    DeniedOutcome,
+    AllowedOutcome,
+)
+
+from pathlib import Path
+
+from acp import RequestError
+from acp.schema import (
+    ReadTextFileRequest,
+    ReadTextFileResponse,
+    WriteTextFileRequest,
+    WriteTextFileResponse,
+)
+
+
+
+import asyncio
+import json
+import sys
+
+from acp.schema import (
+    AgentMessageChunk,
+    AgentThoughtChunk,
+    EmbeddedResourceContentBlock,
+    ResourceContentBlock,
+    SessionNotification,
+    TextContentBlock,
+    UserMessageChunk,
+)
+from acp.task.state import InMemoryMessageStateStore
+
+
+import asyncio
+import os
+import uuid
+
+from acp import RequestError
+from acp.schema import (
+    CreateTerminalRequest,
+    CreateTerminalResponse,
+    KillTerminalCommandRequest,
+    KillTerminalCommandResponse,
+    ReleaseTerminalRequest,
+    ReleaseTerminalResponse,
+    TerminalOutputRequest,
+    TerminalOutputResponse,
+    WaitForTerminalExitRequest,
+    WaitForTerminalExitResponse,
+)
+
 
 
 @dataclass
@@ -98,100 +230,6 @@ class FileSystemController:
 #  uv run acp_client.py claude-code-acp
 #  uv run acp_client.py codex-acp
 
-from __future__ import annotations
-
-import asyncio
-import asyncio.subprocess
-import contextlib
-import json
-import logging
-import os
-import sys
-from datetime import datetime
-from pathlib import Path
-from typing import Iterable, Any
-
-
-from acp import (
-    Client,
-    ClientSideConnection,
-    PROTOCOL_VERSION,
-    RequestError,
-    text_block as acp_text_block,
-)
-from acp.transports import spawn_stdio_transport
-from acp.schema import (
-    AgentMessageChunk,
-    AgentPlanUpdate,
-    AgentThoughtChunk,
-    AllowedOutcome,
-    CancelNotification,
-    ClientCapabilities,
-    FileEditToolCallContent,
-    FileSystemCapability,
-    CreateTerminalRequest,
-    CreateTerminalResponse,
-    DeniedOutcome,
-    EmbeddedResourceContentBlock,
-    KillTerminalCommandRequest,
-    KillTerminalCommandResponse,
-    InitializeRequest,
-    SetSessionModelRequest,
-    NewSessionRequest,
-    PermissionOption,
-    PromptRequest,
-    ReadTextFileRequest,
-    ReadTextFileResponse,
-    RequestPermissionRequest,
-    RequestPermissionResponse,
-    ResourceContentBlock,
-    ReleaseTerminalRequest,
-    ReleaseTerminalResponse,
-    SessionNotification,
-    TerminalToolCallContent,
-    TerminalOutputRequest,
-    TerminalOutputResponse,
-    ContentToolCallContent,
-    TextContentBlock,
-    ToolCallProgress,
-    ToolCallStart,
-    UserMessageChunk,
-    WaitForTerminalExitRequest,
-    WaitForTerminalExitResponse,
-    WriteTextFileRequest,
-    WriteTextFileResponse,
-)
-from acp.contrib.session_state import SessionAccumulator
-
-
-
-
-
-from pyacp.client.event_emitter import EventEmitter
-from pyacp.client.terminal_controller import TerminalController
-from pyacp.client.file_system_controller import FileSystemController
-
-
-from dataclasses import dataclass, field
-from typing import AsyncIterable, Iterable, Union, AsyncIterator
-import asyncio
-from pathlib import Path
-
-from acp.schema import (
-    CancelNotification,
-    DeniedOutcome,
-    AllowedOutcome,
-)
-
-from pathlib import Path
-
-from acp import RequestError
-from acp.schema import (
-    ReadTextFileRequest,
-    ReadTextFileResponse,
-    WriteTextFileRequest,
-    WriteTextFileResponse,
-)
 
 
 def _slice_text(content: str, line: int | None, limit: int | None) -> str:
@@ -241,7 +279,7 @@ def _pick_preferred_option(options: Iterable[PermissionOption]) -> PermissionOpt
     return best
 
 
-# Inlined type definitions from pyacp.types
+
 
 @dataclass
 class TextBlock:
@@ -313,42 +351,6 @@ class EndOfTurnMessage:
 
 Message = Union[UserMessage, AssistantMessage, SystemMessage, ResultMessage, EndOfTurnMessage]
 
-
-
-import asyncio
-import json
-import sys
-
-from acp.schema import (
-    AgentMessageChunk,
-    AgentThoughtChunk,
-    EmbeddedResourceContentBlock,
-    ResourceContentBlock,
-    SessionNotification,
-    TextContentBlock,
-    UserMessageChunk,
-)
-from acp.task.state import InMemoryMessageStateStore
-
-
-import asyncio
-import os
-import uuid
-
-from acp import RequestError
-from acp.schema import (
-    CreateTerminalRequest,
-    CreateTerminalResponse,
-    KillTerminalCommandRequest,
-    KillTerminalCommandResponse,
-    ReleaseTerminalRequest,
-    ReleaseTerminalResponse,
-    TerminalOutputRequest,
-    TerminalOutputResponse,
-    WaitForTerminalExitRequest,
-    WaitForTerminalExitResponse,
-)
-from pyacp.utils.terminal import TerminalInfo
 
 
 class TerminalController:
@@ -697,7 +699,6 @@ class _SDKClientImplementation(EventEmitter, TerminalController, FileSystemContr
 
     async def _emit_worker_event(self, payload: dict) -> None:
 
-
         # Also queue messages for SDK consumption
         if payload["type"] == "TextBlock":
             msg = TextBlock(text=payload["message"]["text"])
@@ -759,7 +760,7 @@ class PyACPSDKClient:
         self._transport_cm = None  # Context manager for the transport
 
 
-    async def __aenter__(self) -> PyACPSDKClient:
+    async def __aenter__(self):
         """Async context manager entry."""
         await self.connect()
         return self
@@ -926,7 +927,7 @@ class PyACPSDKClient:
             if isinstance(message, EndOfTurnMessage):
                 # Turn is complete, stop streaming
                 break
-            message["timestamp"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
+            setattr(message, "timestamp", datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")[:-3])
             yield message
 
     async def interrupt(self) -> None:
