@@ -1,9 +1,20 @@
 [project]
 name = "pyacp"
 version = "0.1.0"
-description = "Add your description here"
+description = "Python SDK for the Agent Client Protocol (ACP) - Build powerful agent-based applications with streaming, terminal, and filesystem capabilities"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
     "agent-client-protocol>=0.6.3",
+]
+keywords = ["acp", "agent", "protocol", "sdk", "async", "streaming", "ai"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Framework :: AsyncIO",
 ]
