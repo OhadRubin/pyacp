@@ -411,7 +411,6 @@ class PyACPSDKClient:
     async def query(
         self,
         prompt: str | AsyncIterable[dict],
-        session_id: str = "default"
     ) -> None:
         """
         Send a new request in streaming mode. Returns immediately - messages stream via receive_messages().
